@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -36,7 +37,7 @@ const finalizerName = "dockercontainer.app.example.com/finalizer"
 func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	// Fetch the DockerContainer instance
+	// 1. Fetch the DockerContainer instance
 	dockerContainer := &appv1alpha1.DockerContainer{}
 	err := r.Get(ctx, req.NamespacedName, dockerContainer)
 	if err != nil {
@@ -46,20 +47,21 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Initialize Docker Client if not already done (lazy init for simplicity)
-	if r.DockerClient == nil {
-		cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
-		if err != nil {
-			l.Error(err, "Failed to create docker client")
-			return ctrl.Result{}, err
-		}
-		r.DockerClient = cli
+	// 2. Resolve Docker Client
+	cli, err := r.getDockerClient(ctx, dockerContainer)
+	if err != nil {
+		l.Error(err, "Failed to create docker client")
+		return ctrl.Result{}, err
+	}
+	// Close client if it's not the injected/cached one
+	// Note: In real world, we might want to cache clients.
+	// For now, if it's not the test client, we close it.
+	if r.DockerClient == nil || (dockerContainer.Spec.DockerHostRef != "" && cli != r.DockerClient) {
+		defer cli.Close()
 	}
 
-	// Check if the instance is marked to be deleted
+	// 3. Finalizer Logic
 	if dockerContainer.ObjectMeta.DeletionTimestamp.IsZero() {
-		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object.
 		if !controllerutil.ContainsFinalizer(dockerContainer, finalizerName) {
 			controllerutil.AddFinalizer(dockerContainer, finalizerName)
 			if err := r.Update(ctx, dockerContainer); err != nil {
@@ -67,28 +69,21 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			}
 		}
 	} else {
-		// The object is being deleted
 		if controllerutil.ContainsFinalizer(dockerContainer, finalizerName) {
-			// our finalizer is present, so lets handle any external dependency
-			if err := r.deleteExternalResources(ctx, dockerContainer); err != nil {
-				// if fail to delete the external dependency here, return with error
-				// so that it can be retried
+			if err := r.deleteExternalResources(ctx, cli, dockerContainer); err != nil {
 				return ctrl.Result{}, err
 			}
 
-			// remove our finalizer from the list and update it.
 			controllerutil.RemoveFinalizer(dockerContainer, finalizerName)
 			if err := r.Update(ctx, dockerContainer); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-
-		// Stop reconciliation as the item is being deleted
 		return ctrl.Result{}, nil
 	}
 
-	// Sync logic
-	err = r.syncContainer(ctx, dockerContainer)
+	// 4. Sync Logic
+	err = r.syncContainer(ctx, cli, dockerContainer)
 	if err != nil {
 		l.Error(err, "Failed to sync container")
 		return ctrl.Result{}, err
@@ -97,9 +92,8 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 }
 
-func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cr *appv1alpha1.DockerContainer) error {
+func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
 	l := log.FromContext(ctx)
-	cli := r.DockerClient
 
 	// Check if container exists
 	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
@@ -125,7 +119,7 @@ func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cr *appv1
 
 	if targetContainer == nil {
 		l.Info("Container not found, creating...", "Name", cr.Spec.ContainerName)
-		return r.createAndStartContainer(ctx, cr)
+		return r.createAndStartContainer(ctx, cli, cr)
 	}
 
 	// Update Status
@@ -157,15 +151,14 @@ func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cr *appv1
 		if err := cli.ContainerRemove(ctx, targetContainer.ID, container.RemoveOptions{Force: true}); err != nil {
 			return err
 		}
-		return r.createAndStartContainer(ctx, cr)
+		return r.createAndStartContainer(ctx, cli, cr)
 	}
 
 	return nil
 }
 
-func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context, cr *appv1alpha1.DockerContainer) error {
+func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
 	l := log.FromContext(ctx)
-	cli := r.DockerClient
 
 	// Pull image
 	reader, err := cli.ImagePull(ctx, cr.Spec.Image, image.PullOptions{})
@@ -229,18 +222,8 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 	return nil
 }
 
-func (r *DockerContainerReconciler) deleteExternalResources(ctx context.Context, cr *appv1alpha1.DockerContainer) error {
+func (r *DockerContainerReconciler) deleteExternalResources(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
 	l := log.FromContext(ctx)
-	// Initialize if needed
-	if r.DockerClient == nil {
-		cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
-		if err != nil {
-			return err
-		}
-		r.DockerClient = cli
-	}
-
-	cli := r.DockerClient
 	// Find container ID by name if not in status or just try by name
 	// But ContainerRemove takes ID or Name.
 	// Try by Name
@@ -261,4 +244,36 @@ func (r *DockerContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appv1alpha1.DockerContainer{}).
 		Complete(r)
+}
+
+// getDockerClient resolves the Docker Client to use.
+func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *appv1alpha1.DockerContainer) (dockerclient.APIClient, error) {
+	// Case 1: Local (Default)
+	if cr.Spec.DockerHostRef == "" {
+		if r.DockerClient != nil {
+			return r.DockerClient, nil
+		}
+		// Fallback to Env/Socket if nil
+		return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	}
+
+	// Case 2: Remote DockerHost
+	host := &appv1alpha1.DockerHost{}
+	hostKey := k8sclient.ObjectKey{
+		Namespace: cr.Namespace,
+		Name:      cr.Spec.DockerHostRef,
+	}
+	if err := r.Get(ctx, hostKey, host); err != nil {
+		return nil, fmt.Errorf("failed to get DockerHost '%s': %w", cr.Spec.DockerHostRef, err)
+	}
+
+	// Create client for host
+	opts := []dockerclient.Opt{
+		dockerclient.WithHost(host.Spec.HostURL),
+		dockerclient.WithAPIVersionNegotiation(),
+	}
+
+	// TODO: Handle TLS using host.Spec.TLSSecretName
+
+	return dockerclient.NewClientWithOpts(opts...)
 }

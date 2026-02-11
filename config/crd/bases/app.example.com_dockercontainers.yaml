@@ -39,6 +39,10 @@ spec:
                 items:
                   type: string
                 type: array
+              dockerHostRef:
+                description: DockerHostRef is the name of the DockerHost CR to use.
+                  If empty, defaults to the local Docker socket.
+                type: string
               containerName:
                 description: ContainerName is the name of the container on the docker
                   host

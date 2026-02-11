@@ -1,0 +1,61 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: dockerhosts.app.example.com
+spec:
+  group: app.example.com
+  names:
+    kind: DockerHost
+    listKind: DockerHostList
+    plural: dockerhosts
+    singular: dockerhost
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DockerHost is the Schema for the dockerhosts API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DockerHostSpec defines the desired state of DockerHost
+            properties:
+              hostURL:
+                description: HostURL is the URL of the Docker Daemon (e.g. tcp://1.2.3.4:2376
+                  or unix:///var/run/docker.sock)
+                type: string
+              tlsSecretName:
+                description: TLSSecretName is the name of the Secret containing ca.pem,
+                  cert.pem, key.pem
+                type: string
+            type: object
+          status:
+            description: DockerHostStatus defines the observed state of DockerHost
+            properties:
+              message:
+                description: Message info about the connection status
+                type: string
+              phase:
+                description: Phase indicates if we can connect to the host (Connected,
+                  Error)
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

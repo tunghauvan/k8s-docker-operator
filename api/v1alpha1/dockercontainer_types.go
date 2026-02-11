@@ -49,6 +49,10 @@ type DockerContainerSpec struct {
 	// RestartPolicy for the container (no, on-failure, always, unless-stopped)
 	// +optional
 	RestartPolicy string `json:"restartPolicy,omitempty"`
+	// DockerHostRef is the name of the DockerHost CR to use.
+	// If empty, defaults to the local Docker socket.
+	// +optional
+	DockerHostRef string `json:"dockerHostRef,omitempty"`
 }
 
 // DockerContainerStatus defines the observed state of DockerContainer
