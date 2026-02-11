@@ -1,14 +1,13 @@
-package controller
+package dockercontainer
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,15 +18,19 @@ import (
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client" // k8s client
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
+	"k8s-docker-operator/internal/controller/common"
 )
 
 // DockerContainerReconciler reconciles a DockerContainer object
@@ -93,6 +96,19 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	err = r.syncContainer(ctx, cli, dockerContainer)
 	if err != nil {
 		l.Error(err, "Failed to sync container")
+		return ctrl.Result{}, err
+	}
+
+	// 5. Tunnel Logic
+	wsURL, err := r.reconcileTunnelServer(ctx, dockerContainer)
+	if err != nil {
+		l.Error(err, "Failed to reconcile tunnel server")
+		return ctrl.Result{}, err
+	}
+
+	err = r.reconcileTunnelClient(ctx, cli, dockerContainer, wsURL)
+	if err != nil {
+		l.Error(err, "Failed to reconcile tunnel client")
 		return ctrl.Result{}, err
 	}
 
@@ -350,7 +366,7 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 			return nil, fmt.Errorf("failed to get TLS Secret '%s': %w", host.Spec.TLSSecretName, err)
 		}
 
-		tlsConfig, err := getTLSConfig(secret)
+		tlsConfig, err := common.GetTLSConfig(secret)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load TLS config: %w", err)
 		}
@@ -366,35 +382,225 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 	return dockerclient.NewClientWithOpts(opts...)
 }
 
-func getTLSConfig(secret *corev1.Secret) (*tls.Config, error) {
-	caCert, ok := secret.Data["ca.pem"]
-	if !ok {
-		return nil, fmt.Errorf("secret missing 'ca.pem'")
+func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer, wsURL string) error {
+	l := log.FromContext(ctx)
+	if len(cr.Spec.Services) == 0 {
+		return nil
 	}
-	certPem, ok := secret.Data["cert.pem"]
-	if !ok {
-		return nil, fmt.Errorf("secret missing 'cert.pem'")
-	}
-	keyPem, ok := secret.Data["key.pem"]
-	if !ok {
-		return nil, fmt.Errorf("secret missing 'key.pem'")
+	if wsURL == "" {
+		l.Info("Tunnel Server URL not ready yet")
+		return nil // Wait for next reconcile
 	}
 
-	// Load CA
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to append CA certificate")
-	}
+	// Support single port for MVP
+	svc := cr.Spec.Services[0]
+	targetPort := svc.TargetPort
 
-	// Load Client Cert/Key
-	cert, err := tls.X509KeyPair(certPem, keyPem)
+	// Get Main Container IP
+	mainContainer, err := cli.ContainerInspect(ctx, cr.Spec.ContainerName)
 	if err != nil {
-		return nil, err
+		if dockerclient.IsErrNotFound(err) {
+			l.Info("Main container not ready yet for tunnel")
+			return nil
+		}
+		return err
 	}
 
-	return &tls.Config{
-		RootCAs:      caCertPool,
-		Certificates: []tls.Certificate{cert},
-		// InsecureSkipVerify: true, // Optional: make configurable via DockerHostSpec?
-	}, nil
+	// Determine Target Address
+	// If using default bridge, we can use IP.
+	// We assume main container is running.
+	targetIP := ""
+	// Iterate networks (usually "bridge")
+	for _, netConf := range mainContainer.NetworkSettings.Networks {
+		targetIP = netConf.IPAddress
+		break
+	}
+	if targetIP == "" {
+		l.Info("Main container has no IP yet")
+		return nil
+	}
+	targetAddr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+
+	// Tunnel Client Name
+	tunnelName := cr.Spec.ContainerName + "-tunnel"
+
+	// Check if already running
+	_, err = cli.ContainerInspect(ctx, tunnelName)
+	if err == nil {
+		// Already exists. Should check config? For now assume OK if running.
+		return nil
+	} else if !dockerclient.IsErrNotFound(err) {
+		return err
+	}
+
+	// Pull Image (Operator Image)
+	// We assume the Docker Host can pull this image.
+	img := os.Getenv("OPERATOR_IMAGE")
+	if img == "" {
+		img = "controller:latest"
+	}
+	// Pulling might fail if local image and not in registry.
+	// Try pull, ignore error (might be local).
+	reader, err := cli.ImagePull(ctx, img, image.PullOptions{})
+	if err == nil {
+		io.Copy(io.Discard, reader)
+		reader.Close()
+	} else {
+		l.Info("Failed to pull tunnel image (might be local)", "error", err)
+	}
+
+	// Create Tunnel Client Container
+	config := &container.Config{
+		Image: img,
+		Cmd: []string{
+			"/manager", "tunnel",
+			"-mode", "client",
+			"-server-url", wsURL,
+			"-target-addr", targetAddr,
+		},
+	}
+	hostConfig := &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{Name: "always"},
+		// Need to reach K8s (External Internet) -> Default bridge is fine.
+		// Need to reach Main Container -> We use IP directly, so same bridge is fine.
+	}
+
+	resp, err := cli.ContainerCreate(ctx, config, hostConfig, nil, nil, tunnelName)
+	if err != nil {
+		return err
+	}
+
+	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return err
+	}
+
+	l.Info("Tunnel Client started", "ID", resp.ID)
+	return nil
+}
+
+func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, cr *appv1alpha1.DockerContainer) (string, error) {
+	if len(cr.Spec.Services) == 0 {
+		return "", nil
+	}
+
+	name := "tunnel-" + cr.Name
+	labels := map[string]string{"app": name}
+
+	// 1. Deployment
+	replicas := int32(1)
+	img := os.Getenv("OPERATOR_IMAGE")
+	if img == "" {
+		img = "controller:latest"
+	}
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: cr.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "tunnel",
+							Image: img,
+							Command: []string{
+								"/manager", "tunnel",
+								"-mode", "server",
+								"-listen-addr", ":8080",
+								"-ws-addr", ":8081",
+							},
+							Ports: []corev1.ContainerPort{
+								{ContainerPort: 8080},
+								{ContainerPort: 8081},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	// Set owner ref
+	if err := ctrl.SetControllerReference(cr, dep, r.Scheme); err != nil {
+		return "", err
+	}
+
+	// Create or Update Deployment
+	foundDep := &appsv1.Deployment{}
+	if err := r.Get(ctx, k8sclient.ObjectKey{Namespace: cr.Namespace, Name: name}, foundDep); err != nil {
+		if errors.IsNotFound(err) {
+			if err := r.Create(ctx, dep); err != nil {
+				return "", err
+			}
+		} else {
+			return "", err
+		}
+	} else {
+		// Update logic
+		// foundDep.Spec = dep.Spec // Simple update
+		// r.Update(ctx, foundDep)
+	}
+
+	// 2. Service
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: cr.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Type:     corev1.ServiceTypeLoadBalancer, // Or NodePort
+			Ports: []corev1.ServicePort{
+				{Name: "traffic", Port: 80, TargetPort: intstr.FromInt(8080)},
+				{Name: "ws", Port: 8081, TargetPort: intstr.FromInt(8081)},
+			},
+		},
+	}
+	if err := ctrl.SetControllerReference(cr, svc, r.Scheme); err != nil {
+		return "", err
+	}
+
+	foundSvc := &corev1.Service{}
+	if err := r.Get(ctx, k8sclient.ObjectKey{Namespace: cr.Namespace, Name: name}, foundSvc); err != nil {
+		if errors.IsNotFound(err) {
+			if err := r.Create(ctx, svc); err != nil {
+				return "", err
+			}
+			// Just created, might not have IP yet.
+			return "", nil
+		} else {
+			return "", err
+		}
+	}
+
+	// Determine WS URL
+	// Try LoadBalancer IP
+	var host string
+	if len(foundSvc.Status.LoadBalancer.Ingress) > 0 {
+		host = foundSvc.Status.LoadBalancer.Ingress[0].IP
+		if host == "" {
+			host = foundSvc.Status.LoadBalancer.Ingress[0].Hostname
+		}
+	}
+
+	// Fallback/Local Dev: Use Service ClusterIP or Name if remote host can verify DNS?
+	// If connecting from outside, we need external IP.
+	// For Kind, we might NOT get LB IP easily without MetalLB.
+	// For now, let's return the ClusterIP and assume user setup networking or we print it.
+	// Or better: Return empty string if not ready, and Requeue.
+
+	if host == "" {
+		// Fallback to ClusterIP for internal testing if Docker Host is local?
+		// host = foundSvc.Spec.ClusterIP
+		// return "ws://" + host + ":8081/ws", nil
+
+		// If LB is pending, we can't connect yet.
+		return "", nil
+	}
+
+	return "ws://" + host + ":8081/ws", nil
 }

@@ -1,4 +1,4 @@
-package controller
+package dockerhost
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
+	"k8s-docker-operator/internal/controller/common"
 )
 
 // ClientBuilderFunc defines a function to create a Docker client
@@ -89,7 +90,7 @@ func (r *DockerHostReconciler) pingDockerHost(ctx context.Context, host *appv1al
 			return fmt.Errorf("failed to get TLS Secret: %w", err)
 		}
 
-		tlsConfig, err := getTLSConfig(secret)
+		tlsConfig, err := common.GetTLSConfig(secret)
 		// Note: getTLSConfig is available since it's in the same package
 		if err != nil {
 			return fmt.Errorf("failed to load TLS config: %w", err)

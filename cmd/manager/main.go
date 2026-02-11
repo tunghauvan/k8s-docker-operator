@@ -16,7 +16,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
-	"k8s-docker-operator/internal/controller"
+	"k8s-docker-operator/internal/controller/dockercontainer"
+	"k8s-docker-operator/internal/controller/dockerhost"
+	"k8s-docker-operator/internal/tunnel"
 )
 
 var (
@@ -32,6 +34,39 @@ func init() {
 }
 
 func main() {
+	// CLI: tunnel [server|client] [args...]
+	if len(os.Args) > 1 && os.Args[1] == "tunnel" {
+		tunnelCmd := flag.NewFlagSet("tunnel", flag.ExitOnError)
+		mode := tunnelCmd.String("mode", "server", "Mode: server or client")
+
+		// Server Args
+		listenAddr := tunnelCmd.String("listen-addr", ":8080", "Server: TCP Listen Address")
+		wsAddr := tunnelCmd.String("ws-addr", ":8081", "Server: WebSocket Listen Address")
+
+		// Client Args
+		serverURL := tunnelCmd.String("server-url", "ws://localhost:8081/ws", "Client: Tunnel Server URL")
+		targetAddr := tunnelCmd.String("target-addr", "localhost:6379", "Client: Target Address")
+
+		tunnelCmd.Parse(os.Args[2:])
+
+		setupLog.Info("Starting Tunnel", "mode", *mode)
+
+		if *mode == "server" {
+			srv := tunnel.NewServer(*listenAddr, *wsAddr)
+			if err := srv.Start(); err != nil {
+				setupLog.Error(err, "Tunnel Server failed")
+				os.Exit(1)
+			}
+		} else if *mode == "client" {
+			cli := tunnel.NewClient(*serverURL, *targetAddr)
+			if err := cli.Start(); err != nil {
+				setupLog.Error(err, "Tunnel Client failed")
+				os.Exit(1)
+			}
+		}
+		return
+	}
+
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
@@ -62,7 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.DockerContainerReconciler{
+	if err = (&dockercontainer.DockerContainerReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
@@ -70,7 +105,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.DockerHostReconciler{
+	if err = (&dockerhost.DockerHostReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

@@ -20,13 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // DockerContainerSpec defines the desired state of DockerContainer
 type DockerContainerSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
 
 	// Image is the Docker image to run
 	Image string `json:"image,omitempty"`
@@ -61,6 +56,20 @@ type DockerContainerSpec struct {
 	// VolumeMounts list of volumes to mount into the container
 	// +optional
 	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
+
+	// Services defines the ports to expose via Kubernetes Service
+	// +optional
+	Services []ServicePort `json:"services,omitempty"`
+}
+
+type ServicePort struct {
+	// Port is the port number to expose on the Kubernetes Service
+	Port int32 `json:"port"`
+	// TargetPort is the port number on the container to forward to
+	TargetPort int32 `json:"targetPort"`
+	// Name is the name of the port
+	// +optional
+	Name string `json:"name,omitempty"`
 }
 
 // VolumeMount defines a volume mount
@@ -76,8 +85,6 @@ type VolumeMount struct {
 
 // DockerContainerStatus defines the observed state of DockerContainer
 type DockerContainerStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
 
 	// ID of the container
 	ID string `json:"id,omitempty"`

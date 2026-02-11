@@ -1,4 +1,4 @@
-package controller
+package dockercontainer
 
 import (
 	"context"
@@ -7,9 +7,13 @@ import (
 	"time"
 
 	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
+	"k8s-docker-operator/internal/controller/common"
 
+	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,7 +52,8 @@ func TestDockerContainerReconciler_Reconcile(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).WithStatusSubresource(cr).Build()
 
 	// Mock Docker Client
-	mockDocker := &MockDockerClient{}
+	// Mock Docker Client
+	mockDocker := &common.MockDockerClient{}
 
 	// Reconciler
 	r := &DockerContainerReconciler{
@@ -84,6 +89,99 @@ func TestDockerContainerReconciler_Reconcile(t *testing.T) {
 	err = k8sClient.Get(ctx, req.NamespacedName, updatedCR)
 	assert.NoError(t, err)
 	assert.Equal(t, "mock-id-"+dockerContainerName, updatedCR.Status.ID)
+}
+
+func TestDockerContainerReconciler_Reconcile_Tunnel(t *testing.T) {
+	// Scheme
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(appv1alpha1.AddToScheme(scheme))
+
+	// Defines
+	crName := "test-app-tunnel"
+	crNamespace := "default"
+
+	cr := &appv1alpha1.DockerContainer{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      crName,
+			Namespace: crNamespace,
+		},
+		Spec: appv1alpha1.DockerContainerSpec{
+			Image:         "nginx:latest",
+			ContainerName: "my-web-app",
+			Services: []appv1alpha1.ServicePort{
+				{Port: 80, TargetPort: 80},
+			},
+		},
+	}
+
+	// Mock K8s Client
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cr).Build()
+
+	// Mock Docker Client
+	mockDocker := &common.MockDockerClient{
+		Containers: []dockertypes.Container{
+			// Main container running
+			{
+				ID:    "main-id",
+				Names: []string{"/my-web-app"},
+				State: "running",
+				Image: "nginx:latest",
+				NetworkSettings: &dockertypes.SummaryNetworkSettings{
+					Networks: map[string]*network.EndpointSettings{
+						"bridge": {IPAddress: "172.17.0.2"},
+					},
+				},
+			},
+		},
+	}
+
+	// Reconciler
+	r := &DockerContainerReconciler{
+		Client:       k8sClient,
+		Scheme:       scheme,
+		DockerClient: mockDocker,
+	}
+
+	// Reconcile
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: crName, Namespace: crNamespace}}
+
+	// Issue: reconcileTunnelServer checks for Service LB IP. Mock client won't update Status automatically.
+	// So 1st Reconcile will create resources and return (wsURL empty).
+	// We need to manually update Service Status in mock client for 2nd Reconcile.
+
+	// 1st Run
+	_, err := r.Reconcile(context.Background(), req)
+	assert.NoError(t, err)
+
+	// Verify Deployment Created
+	dep := &appsv1.Deployment{}
+	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "tunnel-" + crName, Namespace: crNamespace}, dep)
+	assert.NoError(t, err)
+
+	// Verify Service Created
+	svc := &corev1.Service{}
+	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "tunnel-" + crName, Namespace: crNamespace}, svc)
+	assert.NoError(t, err)
+
+	// Update Service Status to simulate LoadBalancer IP
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "1.2.3.4"}}
+	err = k8sClient.Status().Update(context.Background(), svc)
+	assert.NoError(t, err)
+
+	// 2nd Run
+	_, err = r.Reconcile(context.Background(), req)
+	assert.NoError(t, err)
+
+	// Verify Tunnel Container Created
+	found := false
+	for _, created := range mockDocker.Created {
+		if created == "my-web-app-tunnel" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Tunnel client container should be created")
 }
 
 func TestDockerContainerReconciler_Reconcile_AuthAndVolumes(t *testing.T) {
@@ -128,7 +226,7 @@ func TestDockerContainerReconciler_Reconcile_AuthAndVolumes(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, secret).WithStatusSubresource(cr).Build()
 
 	// Mock Docker Client
-	mockDocker := &MockDockerClient{}
+	mockDocker := &common.MockDockerClient{}
 
 	r := &DockerContainerReconciler{
 		Client:       k8sClient,

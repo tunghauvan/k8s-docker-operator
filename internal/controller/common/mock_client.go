@@ -1,7 +1,8 @@
-package controller
+package common
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -26,6 +28,40 @@ type MockDockerClient struct {
 
 func (m *MockDockerClient) ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error) {
 	return m.Containers, nil
+}
+
+func (m *MockDockerClient) ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error) {
+	// Simple mock: find in Contianers list
+	// Note: containerID might be Name or ID.
+	for _, c := range m.Containers {
+		match := false
+		if c.ID == containerID {
+			match = true
+		}
+		for _, name := range c.Names {
+			// Docker names start with /
+			if name == containerID || name == "/"+containerID {
+				match = true
+				break
+			}
+		}
+
+		if match {
+			// Construct minimal ContainerJSON
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					ID:    c.ID,
+					State: &types.ContainerState{Status: c.State, Running: c.State == "running"},
+					Name:  c.Names[0], // Use first name
+				},
+				NetworkSettings: &types.NetworkSettings{
+					NetworkSettingsBase: types.NetworkSettingsBase{},
+					Networks:            c.NetworkSettings.Networks,
+				},
+			}, nil
+		}
+	}
+	return types.ContainerJSON{}, errdefs.NotFound(fmt.Errorf("container not found"))
 }
 
 func (m *MockDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *specs.Platform, containerName string) (container.CreateResponse, error) {

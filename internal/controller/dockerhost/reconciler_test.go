@@ -1,4 +1,4 @@
-package controller
+package dockerhost
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
+	"k8s-docker-operator/internal/controller/common"
 
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ func TestDockerHostReconciler_Reconcile(t *testing.T) {
 
 	// Mock Docker Client Factory
 	mockClientBuilder := func(opts ...client.Opt) (client.APIClient, error) {
-		return &MockDockerClient{}, nil
+		return &common.MockDockerClient{}, nil
 	}
 
 	// Reconciler
