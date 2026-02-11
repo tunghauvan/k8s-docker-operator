@@ -1,6 +1,6 @@
 module k8s-docker-operator
 
-go 1.25.5
+go 1.24.0
 
 require (
 	github.com/docker/docker v27.1.1+incompatible
