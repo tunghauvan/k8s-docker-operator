@@ -1,0 +1,78 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: dockercontainers.app.example.com
+spec:
+  group: app.example.com
+  names:
+    kind: DockerContainer
+    listKind: DockerContainerList
+    plural: dockercontainers
+    singular: dockercontainer
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DockerContainer is the Schema for the dockercontainers API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DockerContainerSpec defines the desired state of DockerContainer
+            properties:
+              command:
+                description: Command to run in the container
+                items:
+                  type: string
+                type: array
+              containerName:
+                description: ContainerName is the name of the container on the docker
+                  host
+                type: string
+              env:
+                description: Env list of environment variables (e.g. "KEY=VALUE")
+                items:
+                  type: string
+                type: array
+              image:
+                description: Image is the Docker image to run
+                type: string
+              ports:
+                description: Ports list of port mappings (e.g. "8080:80")
+                items:
+                  type: string
+                type: array
+              restartPolicy:
+                description: RestartPolicy for the container (no, on-failure, always,
+                  unless-stopped)
+                type: string
+            type: object
+          status:
+            description: DockerContainerStatus defines the observed state of DockerContainer
+            properties:
+              id:
+                description: ID of the container
+                type: string
+              state:
+                description: State request state of the container
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
