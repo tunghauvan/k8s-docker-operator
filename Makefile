@@ -1,5 +1,15 @@
-# Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+# Read version from file
+VERSION ?= $(shell cat VERSION)
+# Base Image Name
+IMG_BASE ?= hvtung/k8s-docker-operator
+
+# Bump version
+bump:
+	@echo "Current version: $(VERSION)"
+	@new_ver=$$(echo $(VERSION) | sed 's/^v//' | awk -F. '{print $$1"."$$2"."$$3+1}'); \
+	echo "v$$new_ver" > VERSION; \
+	echo "Bumped version to v$$new_ver"
+	@echo "New version: $$(cat VERSION)"
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -32,8 +42,9 @@ uninstall:
 
 # Build the docker image
 docker-build:
-	docker build . -t ${IMG}
+	$(MAKE) bump
+	docker build . -t ${IMG_BASE}:$$(cat VERSION)
 
 # Push the docker image
 docker-push:
-	docker push ${IMG}
+	docker push ${IMG_BASE}:$$(cat VERSION)
