@@ -1,0 +1,19 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: private-app
+spec:
+  image: my-private-registry.com/my-app:v1
+  containerName: private-app-container
+  imagePullSecret: my-registry-secret
+  restartPolicy: always
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-registry-secret
+type: Opaque
+stringData:
+  username: myuser
+  password: mypassword
+  server: https://my-private-registry.com

@@ -2,17 +2,24 @@ package controller
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -160,8 +167,26 @@ func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cli docke
 func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
 	l := log.FromContext(ctx)
 
+	// Pull options
+	pullOpts := image.PullOptions{}
+
+	// Handle Registry Auth
+	if cr.Spec.ImagePullSecret != "" {
+		authConfig, err := r.getAuthConfig(ctx, cr.Namespace, cr.Spec.ImagePullSecret)
+		if err != nil {
+			l.Error(err, "Failed to get image pull secret")
+			return err
+		}
+		encodedJSON, err := json.Marshal(authConfig)
+		if err != nil {
+			return err
+		}
+		authStr := base64.URLEncoding.EncodeToString(encodedJSON)
+		pullOpts.RegistryAuth = authStr
+	}
+
 	// Pull image
-	reader, err := cli.ImagePull(ctx, cr.Spec.Image, image.PullOptions{})
+	reader, err := cli.ImagePull(ctx, cr.Spec.Image, pullOpts)
 	if err != nil {
 		l.Error(err, "Failed to pull image")
 		return err
@@ -180,6 +205,18 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 	hostConfig := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(cr.Spec.RestartPolicy)},
 		PortBindings:  nat.PortMap{},
+		Binds:         []string{},
+	}
+
+	// Handle Volumes
+	if len(cr.Spec.VolumeMounts) > 0 {
+		for _, v := range cr.Spec.VolumeMounts {
+			bind := fmt.Sprintf("%s:%s", v.HostPath, v.ContainerPath)
+			if v.ReadOnly {
+				bind += ":ro"
+			}
+			hostConfig.Binds = append(hostConfig.Binds, bind)
+		}
 	}
 
 	// Port mapping logic
@@ -220,6 +257,36 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 
 	l.Info("Container created and started", "ID", resp.ID)
 	return nil
+}
+
+func (r *DockerContainerReconciler) getAuthConfig(ctx context.Context, namespace, secretName string) (registry.AuthConfig, error) {
+	secret := &corev1.Secret{}
+	key := k8sclient.ObjectKey{Namespace: namespace, Name: secretName}
+	if err := r.Get(ctx, key, secret); err != nil {
+		return registry.AuthConfig{}, err
+	}
+
+	// Docker secrets usually have .dockerconfigjson or separate fields
+	// Handling simple username/password/server fields for now or standard docker opaque secret
+	// Let's assume standard k8s docker-registry secret type first, which is .dockerconfigjson
+	// But parsing that is complex. Let's support simple generic secret with username, password, server address first for simplicity.
+	// Or standard keys: username, password, serveraddress, registry-token
+
+	username := string(secret.Data["username"])
+	password := string(secret.Data["password"])
+	serverAddress := string(secret.Data["server"])
+
+	if username == "" {
+		// Try docker-registry keys?
+		// For now, let's Stick to generic secret structure: username, password, server
+		return registry.AuthConfig{}, fmt.Errorf("username not found in secret")
+	}
+
+	return registry.AuthConfig{
+		Username:      username,
+		Password:      password,
+		ServerAddress: serverAddress,
+	}, nil
 }
 
 func (r *DockerContainerReconciler) deleteExternalResources(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
@@ -267,13 +334,67 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 		return nil, fmt.Errorf("failed to get DockerHost '%s': %w", cr.Spec.DockerHostRef, err)
 	}
 
-	// Create client for host
 	opts := []dockerclient.Opt{
 		dockerclient.WithHost(host.Spec.HostURL),
 		dockerclient.WithAPIVersionNegotiation(),
 	}
 
-	// TODO: Handle TLS using host.Spec.TLSSecretName
+	// Handle TLS
+	if host.Spec.TLSSecretName != "" {
+		secret := &corev1.Secret{}
+		secretKey := k8sclient.ObjectKey{
+			Namespace: cr.Namespace,
+			Name:      host.Spec.TLSSecretName,
+		}
+		if err := r.Get(ctx, secretKey, secret); err != nil {
+			return nil, fmt.Errorf("failed to get TLS Secret '%s': %w", host.Spec.TLSSecretName, err)
+		}
+
+		tlsConfig, err := getTLSConfig(secret)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS config: %w", err)
+		}
+
+		httpClient := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		}
+		opts = append(opts, dockerclient.WithHTTPClient(httpClient))
+	}
 
 	return dockerclient.NewClientWithOpts(opts...)
+}
+
+func getTLSConfig(secret *corev1.Secret) (*tls.Config, error) {
+	caCert, ok := secret.Data["ca.pem"]
+	if !ok {
+		return nil, fmt.Errorf("secret missing 'ca.pem'")
+	}
+	certPem, ok := secret.Data["cert.pem"]
+	if !ok {
+		return nil, fmt.Errorf("secret missing 'cert.pem'")
+	}
+	keyPem, ok := secret.Data["key.pem"]
+	if !ok {
+		return nil, fmt.Errorf("secret missing 'key.pem'")
+	}
+
+	// Load CA
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to append CA certificate")
+	}
+
+	// Load Client Cert/Key
+	cert, err := tls.X509KeyPair(certPem, keyPem)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		RootCAs:      caCertPool,
+		Certificates: []tls.Certificate{cert},
+		// InsecureSkipVerify: true, // Optional: make configurable via DockerHostSpec?
+	}, nil
 }

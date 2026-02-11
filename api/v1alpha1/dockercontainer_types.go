@@ -53,6 +53,25 @@ type DockerContainerSpec struct {
 	// If empty, defaults to the local Docker socket.
 	// +optional
 	DockerHostRef string `json:"dockerHostRef,omitempty"`
+
+	// ImagePullSecret is the name of the Secret containing Docker registry credentials
+	// +optional
+	ImagePullSecret string `json:"imagePullSecret,omitempty"`
+
+	// VolumeMounts list of volumes to mount into the container
+	// +optional
+	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
+}
+
+// VolumeMount defines a volume mount
+type VolumeMount struct {
+	// HostPath is the path on the host
+	HostPath string `json:"hostPath"`
+	// ContainerPath is the path in the container
+	ContainerPath string `json:"containerPath"`
+	// ReadOnly if true, mounts the volume as read-only
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // DockerContainerStatus defines the observed state of DockerContainer

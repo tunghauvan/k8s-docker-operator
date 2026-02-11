@@ -1,0 +1,19 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: nginx-remote
+spec:
+  image: nginx:latest
+  containerName: my-remote-nginx
+  dockerHostRef: remote-docker-host
+  ports:
+    - "9090:80"
+  restartPolicy: always
+---
+apiVersion: app.example.com/v1alpha1
+kind: DockerHost
+metadata:
+  name: remote-docker-host
+spec:
+  hostURL: "tcp://192.168.1.100:2376"
+  tlsSecretName: docker-tls-secret

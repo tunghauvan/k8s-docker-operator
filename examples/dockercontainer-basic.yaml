@@ -1,0 +1,10 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: nginx-basic
+spec:
+  image: nginx:latest
+  containerName: my-nginx
+  ports:
+    - "8080:80"
+  restartPolicy: always

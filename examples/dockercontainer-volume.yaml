@@ -1,0 +1,13 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: redis-data
+spec:
+  image: redis:latest
+  containerName: my-redis
+  volumeMounts:
+    - hostPath: /data/redis
+      containerPath: /data
+      readOnly: false
+  ports:
+    - "6379:6379"

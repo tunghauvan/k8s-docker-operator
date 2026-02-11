@@ -16,10 +16,12 @@ import (
 // MockDockerClient implements dockerclient.APIClient for testing
 type MockDockerClient struct {
 	client.APIClient
-	Containers []types.Container
-	Created    []string
-	Removed    []string
-	Started    []string
+	Containers      []types.Container
+	Created         []string
+	Removed         []string
+	Started         []string
+	LastHostConfig  *container.HostConfig
+	LastPullOptions image.PullOptions
 }
 
 func (m *MockDockerClient) ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error) {
@@ -28,6 +30,7 @@ func (m *MockDockerClient) ContainerList(ctx context.Context, options container.
 
 func (m *MockDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *specs.Platform, containerName string) (container.CreateResponse, error) {
 	m.Created = append(m.Created, containerName)
+	m.LastHostConfig = hostConfig
 	id := "mock-id-" + containerName
 	// Add to containers list
 	m.Containers = append(m.Containers, types.Container{
@@ -68,5 +71,14 @@ func (m *MockDockerClient) ContainerRemove(ctx context.Context, containerID stri
 }
 
 func (m *MockDockerClient) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
+	m.LastPullOptions = options
 	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (m *MockDockerClient) Ping(ctx context.Context) (types.Ping, error) {
+	return types.Ping{APIVersion: "1.41"}, nil
+}
+
+func (m *MockDockerClient) Close() error {
+	return nil
 }
