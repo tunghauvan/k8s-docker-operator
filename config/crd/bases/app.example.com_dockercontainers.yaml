@@ -94,6 +94,27 @@ spec:
                   - name
                   type: object
                 type: array
+              healthCheck:
+                description: HealthCheck defines a Docker health check for the container
+                properties:
+                  interval:
+                    description: Interval between checks (e.g. "30s")
+                    type: string
+                  retries:
+                    description: Retries before reporting unhealthy
+                    type: integer
+                  test:
+                    description: Test is the command to run (e.g. ["CMD", "curl",
+                      "-f", "http://localhost/"])
+                    items:
+                      type: string
+                    type: array
+                  timeout:
+                    description: Timeout for a single check (e.g. "5s")
+                    type: string
+                required:
+                - test
+                type: object
               image:
                 description: Image is the Docker image to run
                 type: string
@@ -178,6 +199,10 @@ spec:
           status:
             description: DockerContainerStatus defines the observed state of DockerContainer
             properties:
+              health:
+                description: Health is the Docker health status (healthy, unhealthy,
+                  starting, none)
+                type: string
               id:
                 description: ID of the container
                 type: string

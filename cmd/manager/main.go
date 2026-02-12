@@ -42,6 +42,7 @@ func main() {
 		// Server Args
 		listenAddr := tunnelCmd.String("listen-addr", ":8080", "Server: TCP Listen Address")
 		wsAddr := tunnelCmd.String("ws-addr", ":8081", "Server: WebSocket Listen Address")
+		authToken := tunnelCmd.String("auth-token", "", "Server: Authentication token for tunnel clients")
 
 		// Client Args
 		serverURL := tunnelCmd.String("server-url", "ws://localhost:8081/ws", "Client: Tunnel Server URL")
@@ -55,7 +56,7 @@ func main() {
 		setupLog.Info("Starting Tunnel", "mode", *mode)
 
 		if *mode == "server" {
-			srv := tunnel.NewServer(*listenAddr, *wsAddr)
+			srv := tunnel.NewServer(*listenAddr, *wsAddr, *authToken)
 			if err := srv.Start(); err != nil {
 				setupLog.Error(err, "Tunnel Server failed")
 				os.Exit(1)

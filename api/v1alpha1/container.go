@@ -72,6 +72,25 @@ type DockerContainerSpec struct {
 	// SecretVolumes list of Kubernetes Secrets to mount as files
 	// +optional
 	SecretVolumes []SecretVolume `json:"secretVolumes,omitempty"`
+
+	// HealthCheck defines a Docker health check for the container
+	// +optional
+	HealthCheck *HealthCheckConfig `json:"healthCheck,omitempty"`
+}
+
+// HealthCheckConfig defines health check parameters for the container
+type HealthCheckConfig struct {
+	// Test is the command to run (e.g. ["CMD", "curl", "-f", "http://localhost/"])
+	Test []string `json:"test"`
+	// Interval between checks (e.g. "30s")
+	// +optional
+	Interval string `json:"interval,omitempty"`
+	// Timeout for a single check (e.g. "5s")
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+	// Retries before reporting unhealthy
+	// +optional
+	Retries int `json:"retries,omitempty"`
 }
 
 // EnvVar defines an environment variable
@@ -138,6 +157,9 @@ type DockerContainerStatus struct {
 
 	// State request state of the container
 	State string `json:"state,omitempty"`
+
+	// Health is the Docker health status (healthy, unhealthy, starting, none)
+	Health string `json:"health,omitempty"`
 }
 
 //+kubebuilder:object:root=true

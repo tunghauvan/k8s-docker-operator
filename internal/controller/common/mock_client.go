@@ -23,7 +23,10 @@ type MockDockerClient struct {
 	Removed         []string
 	Started         []string
 	LastHostConfig  *container.HostConfig
+	LastConfig      *container.Config
 	LastPullOptions image.PullOptions
+	// HealthStatus allows tests to simulate Docker health check results
+	HealthStatus string
 }
 
 func (m *MockDockerClient) ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error) {
@@ -31,7 +34,7 @@ func (m *MockDockerClient) ContainerList(ctx context.Context, options container.
 }
 
 func (m *MockDockerClient) ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error) {
-	// Simple mock: find in Contianers list
+	// Simple mock: find in Containers list
 	// Note: containerID might be Name or ID.
 	for _, c := range m.Containers {
 		match := false
@@ -47,16 +50,48 @@ func (m *MockDockerClient) ContainerInspect(ctx context.Context, containerID str
 		}
 
 		if match {
+			// Build health status
+			var health *types.Health
+			if m.HealthStatus != "" {
+				health = &types.Health{
+					Status: m.HealthStatus,
+				}
+			}
+
+			// Build config from last create call or defaults
+			cfg := &container.Config{
+				Image: c.Image,
+			}
+			if m.LastConfig != nil {
+				cfg = m.LastConfig
+			}
+
+			hostCfg := &container.HostConfig{}
+			if m.LastHostConfig != nil {
+				hostCfg = m.LastHostConfig
+			}
+
 			// Construct minimal ContainerJSON
+			var networks map[string]*network.EndpointSettings
+			if c.NetworkSettings != nil {
+				networks = c.NetworkSettings.Networks
+			}
+
 			return types.ContainerJSON{
 				ContainerJSONBase: &types.ContainerJSONBase{
-					ID:    c.ID,
-					State: &types.ContainerState{Status: c.State, Running: c.State == "running"},
-					Name:  c.Names[0], // Use first name
+					ID: c.ID,
+					State: &types.ContainerState{
+						Status:  c.State,
+						Running: c.State == "running",
+						Health:  health,
+					},
+					Name:       c.Names[0], // Use first name
+					HostConfig: hostCfg,
 				},
+				Config: cfg,
 				NetworkSettings: &types.NetworkSettings{
 					NetworkSettingsBase: types.NetworkSettingsBase{},
-					Networks:            c.NetworkSettings.Networks,
+					Networks:            networks,
 				},
 			}, nil
 		}
@@ -67,6 +102,7 @@ func (m *MockDockerClient) ContainerInspect(ctx context.Context, containerID str
 func (m *MockDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *specs.Platform, containerName string) (container.CreateResponse, error) {
 	m.Created = append(m.Created, containerName)
 	m.LastHostConfig = hostConfig
+	m.LastConfig = config
 	id := "mock-id-" + containerName
 	// Add to containers list
 	m.Containers = append(m.Containers, types.Container{
@@ -102,7 +138,15 @@ func (m *MockDockerClient) ContainerRemove(ctx context.Context, containerID stri
 			break
 		}
 	}
-	// Also handle name removal mock
+	// Also try to remove by name
+	for i, c := range m.Containers {
+		for _, name := range c.Names {
+			if name == containerID || name == "/"+containerID {
+				m.Containers = append(m.Containers[:i], m.Containers[i+1:]...)
+				return nil
+			}
+		}
+	}
 	return nil
 }
 

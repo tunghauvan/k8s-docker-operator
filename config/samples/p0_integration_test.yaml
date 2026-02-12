@@ -1,0 +1,23 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: nginx-healthcheck-test
+  namespace: default
+spec:
+  image: nginx:latest
+  containerName: nginx-p0-test
+  ports:
+  - "8082:80"
+  env:
+  - "ENV_TEST=p0_integration"
+  restartPolicy: always
+  healthCheck:
+    test: ["CMD", "curl", "-f", "http://localhost/"]
+    interval: "10s"
+    timeout: "5s"
+    retries: 3
+  services:
+  - name: http
+    port: 80
+    targetPort: 80
+  networkMode: kind

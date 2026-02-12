@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
@@ -15,14 +16,16 @@ import (
 type Server struct {
 	listenAddr string // TCP Address for K8s Service (e.g. :8080)
 	wsAddr     string // WebSocket Address for Client (e.g. :8081)
+	authToken  string // Shared secret for authenticating tunnel clients
 	session    *yamux.Session
 	mu         sync.Mutex
 }
 
-func NewServer(listenAddr, wsAddr string) *Server {
+func NewServer(listenAddr, wsAddr, authToken string) *Server {
 	return &Server{
 		listenAddr: listenAddr,
 		wsAddr:     wsAddr,
+		authToken:  authToken,
 	}
 }
 
@@ -38,6 +41,11 @@ func (s *Server) Start() error {
 	// Start WebSocket Server (Tunnel Protocol)
 	http.HandleFunc("/ws", s.handleWS)
 	log.Printf("Listening for Tunnel Clients on %s", s.wsAddr)
+	if s.authToken != "" {
+		log.Printf("Tunnel authentication enabled")
+	} else {
+		log.Printf("WARNING: Tunnel authentication disabled (no auth token set)")
+	}
 	return http.ListenAndServe(s.wsAddr, nil)
 }
 
@@ -91,6 +99,17 @@ var upgrader = websocket.Upgrader{
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	// Validate auth token if configured
+	if s.authToken != "" {
+		token := r.URL.Query().Get("token")
+		if token != s.authToken {
+			log.Printf("Tunnel auth failed from %s: invalid token", r.RemoteAddr)
+			http.Error(w, "Forbidden: invalid tunnel auth token", http.StatusForbidden)
+			return
+		}
+		log.Printf("Tunnel auth succeeded from %s", r.RemoteAddr)
+	}
+
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WS Upgrade error: %v", err)
@@ -116,11 +135,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.session = session
 	s.mu.Unlock()
 
-	// Wait for session to close
-	// Yamux doesn't export CloseChan directly in older versions, but we can use a KeepAlive or just block?
-	// Actually, if we return, the underlying http handler finishes.
-	// Since we hijacked, it's fine, but let's block to be safe and clean.
-	// In newer yamux, there isn't a Wait.
-	// Let's just block forever or on a context.
-	select {}
+	// Block until session is closed (client disconnects or error)
+	for !session.IsClosed() {
+		time.Sleep(time.Second)
+	}
+	log.Printf("Tunnel Client session closed from %s", ws.RemoteAddr())
 }

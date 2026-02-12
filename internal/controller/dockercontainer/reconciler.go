@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,7 +53,7 @@ type DockerContainerReconciler struct {
 //+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers/finalizers,verbs=update
 //+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
@@ -160,10 +164,28 @@ func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cli docke
 		return r.createAndStartContainer(ctx, cli, cr)
 	}
 
-	// Update Status
+	// Update Status (state + ID)
+	statusChanged := false
 	if cr.Status.ID != targetContainer.ID || cr.Status.State != targetContainer.State {
 		cr.Status.ID = targetContainer.ID
 		cr.Status.State = targetContainer.State
+		statusChanged = true
+	}
+
+	// Health check status via inspect
+	inspectResp, inspectErr := cli.ContainerInspect(ctx, targetContainer.ID)
+	if inspectErr == nil && inspectResp.State != nil {
+		health := "none"
+		if inspectResp.State.Health != nil {
+			health = string(inspectResp.State.Health.Status)
+		}
+		if cr.Status.Health != health {
+			cr.Status.Health = health
+			statusChanged = true
+		}
+	}
+
+	if statusChanged {
 		if err := r.Status().Update(ctx, cr); err != nil {
 			l.Error(err, "Failed to update status")
 		}
@@ -177,22 +199,100 @@ func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cli docke
 		}
 	}
 
-	// Determine if update is needed (simple check: Image)
-	if targetContainer.Image != cr.Spec.Image {
-		l.Info("Container image mismatch, recreating...", "Current", targetContainer.Image, "Expected", cr.Spec.Image)
-		// Stop and remove
-		timeout := 10 // seconds
-		stopTimeout := int(timeout)
-		if err := cli.ContainerStop(ctx, targetContainer.ID, container.StopOptions{Timeout: &stopTimeout}); err != nil {
-			l.Error(err, "Failed to stop container for update")
+	// Drift Detection: check if container config matches desired spec
+	if inspectErr == nil {
+		if needsRecreate(inspectResp, &cr.Spec) {
+			l.Info("Container config drift detected, recreating...",
+				"CurrentImage", targetContainer.Image,
+				"ExpectedImage", cr.Spec.Image,
+			)
+			// Stop and remove
+			timeout := 10
+			stopTimeout := int(timeout)
+			if err := cli.ContainerStop(ctx, targetContainer.ID, container.StopOptions{Timeout: &stopTimeout}); err != nil {
+				l.Error(err, "Failed to stop container for update")
+			}
+			if err := cli.ContainerRemove(ctx, targetContainer.ID, container.RemoveOptions{Force: true}); err != nil {
+				return err
+			}
+			return r.createAndStartContainer(ctx, cli, cr)
 		}
-		if err := cli.ContainerRemove(ctx, targetContainer.ID, container.RemoveOptions{Force: true}); err != nil {
-			return err
-		}
-		return r.createAndStartContainer(ctx, cli, cr)
 	}
 
 	return nil
+}
+
+// needsRecreate checks if the running container's config differs from the desired spec.
+func needsRecreate(inspected types.ContainerJSON, spec *appv1alpha1.DockerContainerSpec) bool {
+	if inspected.Config == nil {
+		return false
+	}
+
+	// 1. Image mismatch
+	if inspected.Config.Image != spec.Image {
+		return true
+	}
+
+	// 2. Command mismatch
+	if len(spec.Command) > 0 && !slices.Equal(inspected.Config.Cmd, spec.Command) {
+		return true
+	}
+
+	// 3. Env mismatch (compare sorted, only spec-defined vars)
+	if len(spec.Env) > 0 {
+		specEnvSorted := make([]string, len(spec.Env))
+		copy(specEnvSorted, spec.Env)
+		sort.Strings(specEnvSorted)
+
+		for _, expected := range specEnvSorted {
+			found := false
+			for _, actual := range inspected.Config.Env {
+				if actual == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return true
+			}
+		}
+	}
+
+	// 4. RestartPolicy mismatch
+	if spec.RestartPolicy != "" && inspected.HostConfig != nil {
+		if string(inspected.HostConfig.RestartPolicy.Name) != spec.RestartPolicy {
+			return true
+		}
+	}
+
+	return false
+}
+
+// buildDockerHealthCheck converts our CRD HealthCheckConfig to Docker's container.HealthConfig
+func buildDockerHealthCheck(hc *appv1alpha1.HealthCheckConfig) *container.HealthConfig {
+	if hc == nil {
+		return nil
+	}
+
+	config := &container.HealthConfig{
+		Test: hc.Test,
+	}
+
+	if hc.Interval != "" {
+		if d, err := time.ParseDuration(hc.Interval); err == nil {
+			config.Interval = d
+		}
+	}
+	if hc.Timeout != "" {
+		if d, err := time.ParseDuration(hc.Timeout); err == nil {
+			config.Timeout = d
+		}
+	}
+	if hc.Retries > 0 {
+		config.Retries = hc.Retries
+	}
+
+	return config
 }
 
 func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
@@ -244,9 +344,10 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 
 	// Configure Config
 	config := &container.Config{
-		Image: cr.Spec.Image,
-		Cmd:   cr.Spec.Command,
-		Env:   resolvedEnv,
+		Image:       cr.Spec.Image,
+		Cmd:         cr.Spec.Command,
+		Env:         resolvedEnv,
+		Healthcheck: buildDockerHealthCheck(cr.Spec.HealthCheck),
 	}
 
 	// Configure HostConfig
@@ -472,6 +573,59 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 	return dockerclient.NewClientWithOpts(opts...)
 }
 
+// generateToken creates a random hex token for tunnel authentication
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// ensureTunnelAuthSecret creates or retrieves the auth secret for tunnel authentication
+func (r *DockerContainerReconciler) ensureTunnelAuthSecret(ctx context.Context, cr *appv1alpha1.DockerContainer) (string, error) {
+	secretName := "tunnel-auth-" + cr.Name
+
+	// Try to get existing secret
+	existingSecret := &corev1.Secret{}
+	err := r.Get(ctx, k8sclient.ObjectKey{Namespace: cr.Namespace, Name: secretName}, existingSecret)
+	if err == nil {
+		// Secret exists, return the token
+		return string(existingSecret.Data["token"]), nil
+	}
+	if !errors.IsNotFound(err) {
+		return "", err
+	}
+
+	// Generate new token
+	token, err := generateToken()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate tunnel token: %w", err)
+	}
+
+	// Create new secret
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: cr.Namespace,
+		},
+		Data: map[string][]byte{
+			"token": []byte(token),
+		},
+	}
+
+	// Set owner reference so it's cleaned up with the CR
+	if err := ctrl.SetControllerReference(cr, secret, r.Scheme); err != nil {
+		return "", err
+	}
+
+	if err := r.Create(ctx, secret); err != nil {
+		return "", fmt.Errorf("failed to create tunnel auth secret: %w", err)
+	}
+
+	return token, nil
+}
+
 func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer, wsURL string) error {
 	l := log.FromContext(ctx)
 	if len(cr.Spec.Services) == 0 {
@@ -552,11 +706,18 @@ func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, c
 		}
 	}
 
+	// Get auth token for tunnel authentication
+	authToken, err := r.ensureTunnelAuthSecret(ctx, cr)
+	if err != nil {
+		l.Error(err, "Failed to ensure tunnel auth secret")
+		return err
+	}
+
 	// Target URL: ws://tunnel-nginx-basic.default.svc:8081/ws
 	targetQuery := url.QueryEscape(wsURL)
 
-	// Gateway Connection URL: ws://gateway:30000/ws?target=...
-	clientConnectURL := fmt.Sprintf("ws://%s:%d/ws?target=%s", gatewayHost, gatewayPort, targetQuery)
+	// Gateway Connection URL with auth token: ws://gateway:30000/ws?target=...&token=...
+	clientConnectURL := fmt.Sprintf("ws://%s:%d/ws?target=%s&token=%s", gatewayHost, gatewayPort, targetQuery, url.QueryEscape(authToken))
 
 	// Create Tunnel Client Container
 	config := &container.Config{
@@ -605,7 +766,13 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 	name := "tunnel-" + cr.Name
 	labels := map[string]string{"app": name}
 
-	// 1. Deployment
+	// 1. Ensure auth token secret exists
+	authToken, err := r.ensureTunnelAuthSecret(ctx, cr)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure tunnel auth: %w", err)
+	}
+
+	// 2. Deployment
 	replicas := int32(1)
 	img := os.Getenv("OPERATOR_IMAGE")
 	if img == "" {
@@ -632,6 +799,7 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 								"-mode", "server",
 								"-listen-addr", ":8080",
 								"-ws-addr", ":8081",
+								"-auth-token", authToken,
 							},
 							Ports: []corev1.ContainerPort{
 								{ContainerPort: 8080},
@@ -659,12 +827,14 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 			return "", err
 		}
 	} else {
-		// Update logic
-		// foundDep.Spec = dep.Spec // Simple update
-		// r.Update(ctx, foundDep)
+		// Update Deployment spec to ensure auth token is current
+		foundDep.Spec.Template.Spec.Containers = dep.Spec.Template.Spec.Containers
+		if err := r.Update(ctx, foundDep); err != nil {
+			return "", err
+		}
 	}
 
-	// 2. Service
+	// 3. Service
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -696,7 +866,7 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 		}
 	}
 
-	// 3. Construct Tunnel Server URL (Internal ClusterDNS)
+	// 4. Construct Tunnel Server URL (Internal ClusterDNS)
 	// ws://<service-name>.<namespace>.svc:8081/ws
 	tunnelServerURL := fmt.Sprintf("ws://%s.%s.svc:8081/ws", foundSvc.Name, foundSvc.Namespace)
 	return tunnelServerURL, nil
