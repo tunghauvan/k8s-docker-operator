@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client" // k8s client
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,6 +41,16 @@ type DockerContainerReconciler struct {
 	Scheme       *runtime.Scheme
 	DockerClient dockerclient.APIClient
 }
+
+//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers/finalizers,verbs=update
+//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 
 const finalizerName = "dockercontainer.app.example.com/finalizer"
 
@@ -449,20 +461,49 @@ func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, c
 		l.Info("Failed to pull tunnel image (might be local)", "error", err)
 	}
 
+	// Gateway Logic:
+	gatewayPort := 30000
+	gatewayHost := "localhost"
+
+	netMode := cr.Spec.NetworkMode
+	if netMode == "kind" {
+		// Discover Kind Control Plane Node Name
+		nodes := &corev1.NodeList{}
+		if err := r.List(ctx, nodes, client.MatchingLabels{"node-role.kubernetes.io/control-plane": ""}); err == nil && len(nodes.Items) > 0 {
+			gatewayHost = nodes.Items[0].Name
+		}
+	}
+
+	// Target URL: ws://tunnel-nginx-basic.default.svc:8081/ws
+	targetQuery := url.QueryEscape(wsURL)
+
+	// Gateway Connection URL: ws://gateway:30000/ws?target=...
+	clientConnectURL := fmt.Sprintf("ws://%s:%d/ws?target=%s", gatewayHost, gatewayPort, targetQuery)
+
 	// Create Tunnel Client Container
 	config := &container.Config{
 		Image: img,
 		Cmd: []string{
-			"/manager", "tunnel",
+			"tunnel",
 			"-mode", "client",
-			"-server-url", wsURL,
+			"-server-url", clientConnectURL,
 			"-target-addr", targetAddr,
 		},
 	}
+
+	// Network Mode
+	// netMode already defined above
+	if netMode == "" {
+		// Default behavior: empty is Bridge (Docker default).
+		// Previously we hardcoded "host" for failed Kind fix.
+		// Now we rely on user specifying "kind" or "host".
+		// For backward compatibility with previous attempt, maybe we should stick with empty?
+		// Empty is safer for standard Docker.
+	}
+
 	hostConfig := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: "always"},
-		// Need to reach K8s (External Internet) -> Default bridge is fine.
-		// Need to reach Main Container -> We use IP directly, so same bridge is fine.
+		NetworkMode:   container.NetworkMode(netMode),
 	}
 
 	resp, err := cli.ContainerCreate(ctx, config, hostConfig, nil, nil, tunnelName)
@@ -553,7 +594,7 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: labels,
-			Type:     corev1.ServiceTypeLoadBalancer, // Or NodePort
+			Type:     corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
 				{Name: "traffic", Port: 80, TargetPort: intstr.FromInt(8080)},
 				{Name: "ws", Port: 8081, TargetPort: intstr.FromInt(8081)},
@@ -577,30 +618,8 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 		}
 	}
 
-	// Determine WS URL
-	// Try LoadBalancer IP
-	var host string
-	if len(foundSvc.Status.LoadBalancer.Ingress) > 0 {
-		host = foundSvc.Status.LoadBalancer.Ingress[0].IP
-		if host == "" {
-			host = foundSvc.Status.LoadBalancer.Ingress[0].Hostname
-		}
-	}
-
-	// Fallback/Local Dev: Use Service ClusterIP or Name if remote host can verify DNS?
-	// If connecting from outside, we need external IP.
-	// For Kind, we might NOT get LB IP easily without MetalLB.
-	// For now, let's return the ClusterIP and assume user setup networking or we print it.
-	// Or better: Return empty string if not ready, and Requeue.
-
-	if host == "" {
-		// Fallback to ClusterIP for internal testing if Docker Host is local?
-		// host = foundSvc.Spec.ClusterIP
-		// return "ws://" + host + ":8081/ws", nil
-
-		// If LB is pending, we can't connect yet.
-		return "", nil
-	}
-
-	return "ws://" + host + ":8081/ws", nil
+	// 3. Construct Tunnel Server URL (Internal ClusterDNS)
+	// ws://<service-name>.<namespace>.svc:8081/ws
+	tunnelServerURL := fmt.Sprintf("ws://%s.%s.svc:8081/ws", foundSvc.Name, foundSvc.Namespace)
+	return tunnelServerURL, nil
 }

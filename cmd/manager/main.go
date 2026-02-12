@@ -47,6 +47,9 @@ func main() {
 		serverURL := tunnelCmd.String("server-url", "ws://localhost:8081/ws", "Client: Tunnel Server URL")
 		targetAddr := tunnelCmd.String("target-addr", "localhost:6379", "Client: Target Address")
 
+		// Gateway Args
+		gatewayListenAddr := tunnelCmd.String("gateway-addr", ":8080", "Gateway: Listen Address")
+
 		tunnelCmd.Parse(os.Args[2:])
 
 		setupLog.Info("Starting Tunnel", "mode", *mode)
@@ -61,6 +64,11 @@ func main() {
 			cli := tunnel.NewClient(*serverURL, *targetAddr)
 			if err := cli.Start(); err != nil {
 				setupLog.Error(err, "Tunnel Client failed")
+				os.Exit(1)
+			}
+		} else if *mode == "gateway" {
+			if err := tunnel.RunGateway(*gatewayListenAddr); err != nil {
+				setupLog.Error(err, "Tunnel Gateway failed")
 				os.Exit(1)
 			}
 		}

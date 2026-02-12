@@ -60,6 +60,10 @@ type DockerContainerSpec struct {
 	// Services defines the ports to expose via Kubernetes Service
 	// +optional
 	Services []ServicePort `json:"services,omitempty"`
+
+	// NetworkMode for the container (e.g. "host", "bridge", "kind")
+	// +optional
+	NetworkMode string `json:"networkMode,omitempty"`
 }
 
 type ServicePort struct {

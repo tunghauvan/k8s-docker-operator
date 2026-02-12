@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: dockercontainers.app.example.com
 spec:
   group: app.example.com
@@ -20,14 +20,19 @@ spec:
         description: DockerContainer is the Schema for the dockercontainers API
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -39,13 +44,14 @@ spec:
                 items:
                   type: string
                 type: array
-              dockerHostRef:
-                description: DockerHostRef is the name of the DockerHost CR to use.
-                  If empty, defaults to the local Docker socket.
-                type: string
               containerName:
                 description: ContainerName is the name of the container on the docker
                   host
+                type: string
+              dockerHostRef:
+                description: |-
+                  DockerHostRef is the name of the DockerHost CR to use.
+                  If empty, defaults to the local Docker socket.
                 type: string
               env:
                 description: Env list of environment variables (e.g. "KEY=VALUE")
@@ -54,6 +60,14 @@ spec:
                 type: array
               image:
                 description: Image is the Docker image to run
+                type: string
+              imagePullSecret:
+                description: ImagePullSecret is the name of the Secret containing
+                  Docker registry credentials
+                type: string
+              networkMode:
+                description: NetworkMode for the container (e.g. "host", "bridge",
+                  "kind")
                 type: string
               ports:
                 description: Ports list of port mappings (e.g. "8080:80")
@@ -64,6 +78,47 @@ spec:
                 description: RestartPolicy for the container (no, on-failure, always,
                   unless-stopped)
                 type: string
+              services:
+                description: Services defines the ports to expose via Kubernetes Service
+                items:
+                  properties:
+                    name:
+                      description: Name is the name of the port
+                      type: string
+                    port:
+                      description: Port is the port number to expose on the Kubernetes
+                        Service
+                      format: int32
+                      type: integer
+                    targetPort:
+                      description: TargetPort is the port number on the container
+                        to forward to
+                      format: int32
+                      type: integer
+                  required:
+                  - port
+                  - targetPort
+                  type: object
+                type: array
+              volumeMounts:
+                description: VolumeMounts list of volumes to mount into the container
+                items:
+                  description: VolumeMount defines a volume mount
+                  properties:
+                    containerPath:
+                      description: ContainerPath is the path in the container
+                      type: string
+                    hostPath:
+                      description: HostPath is the path on the host
+                      type: string
+                    readOnly:
+                      description: ReadOnly if true, mounts the volume as read-only
+                      type: boolean
+                  required:
+                  - containerPath
+                  - hostPath
+                  type: object
+                type: array
             type: object
           status:
             description: DockerContainerStatus defines the observed state of DockerContainer
