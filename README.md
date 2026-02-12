@@ -98,6 +98,7 @@ spec:
     - hostPath: "/tmp/data"
       containerPath: "/usr/share/nginx/html"
       readOnly: true
+```
 
 ### 4. Kubernetes Secret Mapping
 
