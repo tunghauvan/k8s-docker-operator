@@ -123,7 +123,6 @@ spec:
     - secretName: my-test-secret
       mountPath: "/etc/secrets"
 ```
-```
 
 ## 🏗 Architecture (Tunnel Gateway)
 
