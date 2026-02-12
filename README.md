@@ -8,6 +8,7 @@ A Kubernetes operator designed to manage Docker containers across multiple Docke
 | :--- | :--- |
 | **Multi-Host Support** | Connect to multiple Docker daemons via Unix socket or TCP with TLS. |
 | **Lifecycle Management** | Control container state (Image, Command, Env, Restart) via Kubernetes CRDs. |
+| **Secret Integration** | Map Kubernetes Secrets to container environment variables or files. |
 | **Automated Tunneling** | Expose Docker ports as Kubernetes Services using WebSocket-based reverse tunnels. |
 | **Tunnel Gateway** | Centralized NodePort entry point for all tunnels, keeping app services internal. |
 | **Private Registry Auth** | Use standard Kubernetes `ImagePullSecrets` for private image pulls. |
@@ -77,6 +78,31 @@ spec:
     - hostPath: "/tmp/data"
       containerPath: "/usr/share/nginx/html"
       readOnly: true
+
+### 4. Kubernetes Secret Mapping
+
+Inject sensitive data as environment variables or files:
+
+```yaml
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: nginx-secret
+spec:
+  image: "nginx:latest"
+  containerName: "nginx-with-secrets"
+  # Map Secret keys to Environment Variables
+  envVars:
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: my-test-secret
+          key: password
+  # Map entire Secret to a directory
+  secretVolumes:
+    - secretName: my-test-secret
+      mountPath: "/etc/secrets"
+```
 ```
 
 ## 🏗 Architecture (Tunnel Gateway)
