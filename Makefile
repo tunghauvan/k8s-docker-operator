@@ -49,6 +49,12 @@ docker-build:
 docker-push:
 	docker push ${IMG_BASE}:$$(cat VERSION)
 
+# Build multi-platform docker image using buildx
+PLATFORMS ?= linux/amd64,linux/arm64
+docker-buildx:
+	$(MAKE) bump
+	docker buildx build --platform $(PLATFORMS) . -t ${IMG_BASE}:$$(cat VERSION) --push
+
 # Generate install manifests
 dist:
 	@echo "Generating install/install.yaml..."
