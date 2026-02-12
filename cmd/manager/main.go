@@ -15,10 +15,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
-	"k8s-docker-operator/internal/controller/dockercontainer"
-	"k8s-docker-operator/internal/controller/dockerhost"
-	"k8s-docker-operator/internal/tunnel"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockercontainer"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockerhost"
+	"github.com/tunghauvan/k8s-docker-operator/internal/tunnel"
 )
 
 var (

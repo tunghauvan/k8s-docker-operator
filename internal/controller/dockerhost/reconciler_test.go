@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
-	"k8s-docker-operator/internal/controller/common"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/common"
 
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"

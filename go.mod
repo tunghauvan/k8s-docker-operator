@@ -1,4 +1,4 @@
-module k8s-docker-operator
+module github.com/tunghauvan/k8s-docker-operator
 
 go 1.24.0
 

@@ -31,8 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
-	"k8s-docker-operator/internal/controller/common"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/common"
 )
 
 // DockerContainerReconciler reconciles a DockerContainer object

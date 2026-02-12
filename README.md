@@ -1,0 +1,92 @@
+# Kubernetes Docker Operator
+
+A Kubernetes operator designed to manage Docker containers across multiple Docker hosts directly from Kubernetes. It bridge the gap between Docker and Kubernetes by providing seamless lifecycle management and automated network tunneling.
+
+## 🚀 Features
+
+-   **DockerHost Management**: Define and connect to multiple Docker daemons (Local Unix socket or Remote TCP with TLS).
+-   **DockerContainer Lifecycle**: Manage container state (Image, Command, Env, Restart Policy) using Kubernetes CRDs.
+-   **Seamless Network Tunneling**: 
+    -   Automatically exposes Docker container ports as Kubernetes Services.
+    -   Uses a high-performance WebSocket-based tunnel.
+    -   **Tunnel Gateway**: A centralized gateway providing a single entry point (NodePort) while keeping application services internal (`ClusterIP`).
+-   **Private Registry Support**: Pull images from private registries using standard Kubernetes `ImagePullSecrets`.
+-   **Volume Management**: Bind host paths to containers.
+-   **Optimized for Kind**: Built-in compatibility for local development with Kind clusters.
+
+## 📦 Installation
+
+To install the operator and its dependencies (RBAC, CRDs, and Tunnel Gateway), use the provided install manifest:
+
+```bash
+kubectl apply -f install/install.yaml
+```
+
+## 🛠 Usage
+
+### 1. Define a Docker Host (Remote)
+
+If you want to use a remote Docker daemon, create a `DockerHost` resource:
+
+```yaml
+apiVersion: app.example.com/v1alpha1
+kind: DockerHost
+metadata:
+  name: remote-host
+spec:
+  hostURL: "tcp://1.2.3.4:2376"
+  tlsSecretName: docker-tls-secret # Optional: Secret containing ca.pem, cert.pem, key.pem
+```
+
+### 2. Deploy a Container with Tunneling
+
+Deploy an Nginx container on a specific host and expose it to the Kubernetes cluster:
+
+```yaml
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: nginx-basic
+spec:
+  image: "nginx:latest"
+  containerName: "my-nginx"
+  dockerHostRef: "remote-host" # Omit for local Docker socket
+  services:
+    - name: http
+      port: 80
+      targetPort: 80
+```
+
+Once applied, the operator will:
+1.  Pull the image on the target Docker host.
+2.  Start the container.
+3.  Deploy a **Tunnel Server** pod in Kubernetes.
+4.  Start a **Tunnel Client** alongside your container on the Docker host.
+5.  Create a **Kubernetes Service** named `tunnel-nginx-basic` pointing to the container.
+
+### 3. Volume Mounting
+
+```yaml
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: nginx-volume
+spec:
+  image: "nginx:latest"
+  volumeMounts:
+    - hostPath: "/tmp/data"
+      containerPath: "/usr/share/nginx/html"
+      readOnly: true
+```
+
+## 🏗 Architecture (Tunnel Gateway)
+
+The operator uses a centralized **Tunnel Gateway** architecture to minimize external port exposure:
+
+-   **Tunnel Gateway**: Listens on a fixed NodePort (`30000`). This is the only port exposed externally for tunneling.
+-   **Tunnel Server**: Runs inside Kubernetes as a `ClusterIP` service. It remains private and secure.
+-   **Tunnel Client**: Runs on the Docker host, connecting to the Gateway to establish a reverse tunnel back to Kubernetes.
+
+## 📜 License
+
+Copyright 2024. Licensed under the Apache License, Version 2.0.

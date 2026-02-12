@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
 
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"

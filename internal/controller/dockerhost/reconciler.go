@@ -14,8 +14,8 @@ import (
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
-	"k8s-docker-operator/internal/controller/common"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/common"
 )
 
 // ClientBuilderFunc defines a function to create a Docker client

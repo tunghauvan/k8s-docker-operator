@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
 
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

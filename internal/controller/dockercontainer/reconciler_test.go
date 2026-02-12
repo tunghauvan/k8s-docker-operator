@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	appv1alpha1 "k8s-docker-operator/api/v1alpha1"
-	"k8s-docker-operator/internal/controller/common"
+	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/common"
 
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/network"
