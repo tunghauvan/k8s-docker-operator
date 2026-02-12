@@ -58,6 +58,42 @@ spec:
                 items:
                   type: string
                 type: array
+              envVars:
+                description: EnvVars list of environment variables with support for
+                  ValueFrom
+                items:
+                  description: EnvVar defines an environment variable
+                  properties:
+                    name:
+                      description: Name of the environment variable
+                      type: string
+                    value:
+                      description: Value of the environment variable (literal)
+                      type: string
+                    valueFrom:
+                      description: ValueFrom source for the environment variable's
+                        value
+                      properties:
+                        secretKeyRef:
+                          description: SecretKeyRef selects a key of a secret in the
+                            target container's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from. Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              description: Name of the referent
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
               image:
                 description: Image is the Docker image to run
                 type: string
@@ -78,6 +114,25 @@ spec:
                 description: RestartPolicy for the container (no, on-failure, always,
                   unless-stopped)
                 type: string
+              secretVolumes:
+                description: SecretVolumes list of Kubernetes Secrets to mount as
+                  files
+                items:
+                  description: SecretVolume defines a mapping from a K8s Secret to
+                    a directory in the container
+                  properties:
+                    mountPath:
+                      description: MountPath is the absolute path in the container
+                        where the secret should be mounted
+                      type: string
+                    secretName:
+                      description: SecretName is the name of the Kubernetes Secret
+                      type: string
+                  required:
+                  - mountPath
+                  - secretName
+                  type: object
+                type: array
               services:
                 description: Services defines the ports to expose via Kubernetes Service
                 items:

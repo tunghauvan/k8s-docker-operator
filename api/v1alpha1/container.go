@@ -64,6 +64,49 @@ type DockerContainerSpec struct {
 	// NetworkMode for the container (e.g. "host", "bridge", "kind")
 	// +optional
 	NetworkMode string `json:"networkMode,omitempty"`
+
+	// EnvVars list of environment variables with support for ValueFrom
+	// +optional
+	EnvVars []EnvVar `json:"envVars,omitempty"`
+
+	// SecretVolumes list of Kubernetes Secrets to mount as files
+	// +optional
+	SecretVolumes []SecretVolume `json:"secretVolumes,omitempty"`
+}
+
+// EnvVar defines an environment variable
+type EnvVar struct {
+	// Name of the environment variable
+	Name string `json:"name"`
+	// Value of the environment variable (literal)
+	// +optional
+	Value string `json:"value,omitempty"`
+	// ValueFrom source for the environment variable's value
+	// +optional
+	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
+}
+
+// EnvVarSource represents a source for the value of an EnvVar
+type EnvVarSource struct {
+	// SecretKeyRef selects a key of a secret in the target container's namespace
+	// +optional
+	SecretKeyRef *SecretKeySelector `json:"secretKeyRef,omitempty"`
+}
+
+// SecretKeySelector selects a key of a Secret
+type SecretKeySelector struct {
+	// Name of the referent
+	Name string `json:"name"`
+	// The key of the secret to select from. Must be a valid secret key.
+	Key string `json:"key"`
+}
+
+// SecretVolume defines a mapping from a K8s Secret to a directory in the container
+type SecretVolume struct {
+	// SecretName is the name of the Kubernetes Secret
+	SecretName string `json:"secretName"`
+	// MountPath is the absolute path in the container where the secret should be mounted
+	MountPath string `json:"mountPath"`
 }
 
 type ServicePort struct {

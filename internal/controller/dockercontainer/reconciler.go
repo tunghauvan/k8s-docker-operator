@@ -1,6 +1,8 @@
 package dockercontainer
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -222,11 +225,28 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 	defer reader.Close()
 	io.Copy(io.Discard, reader) // Wait for pull to finish
 
+	// Resolve EnvVars (literals and secrets)
+	resolvedEnv := cr.Spec.Env
+	if len(cr.Spec.EnvVars) > 0 {
+		for _, ev := range cr.Spec.EnvVars {
+			val := ev.Value
+			if ev.ValueFrom != nil && ev.ValueFrom.SecretKeyRef != nil {
+				secretVal, err := r.getSecretValue(ctx, cr.Namespace, ev.ValueFrom.SecretKeyRef.Name, ev.ValueFrom.SecretKeyRef.Key)
+				if err != nil {
+					l.Error(err, "Failed to resolve secret env var", "Name", ev.Name)
+					return err
+				}
+				val = secretVal
+			}
+			resolvedEnv = append(resolvedEnv, fmt.Sprintf("%s=%s", ev.Name, val))
+		}
+	}
+
 	// Configure Config
 	config := &container.Config{
 		Image: cr.Spec.Image,
 		Cmd:   cr.Spec.Command,
-		Env:   cr.Spec.Env,
+		Env:   resolvedEnv,
 	}
 
 	// Configure HostConfig
@@ -278,6 +298,17 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 		return err
 	}
 
+	// Handle Secret Volumes via Copy Strategy (Upload files after creation but before start)
+	if len(cr.Spec.SecretVolumes) > 0 {
+		for _, sv := range cr.Spec.SecretVolumes {
+			if err := r.uploadSecretToContainer(ctx, cli, cr.Namespace, sv, resp.ID); err != nil {
+				l.Error(err, "Failed to upload secret volume", "Secret", sv.SecretName, "Path", sv.MountPath)
+				// Should we proceed? Probably not, security credentials might be missing.
+				return err
+			}
+		}
+	}
+
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		l.Error(err, "Failed to start container")
 		return err
@@ -285,6 +316,53 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 
 	l.Info("Container created and started", "ID", resp.ID)
 	return nil
+}
+
+func (r *DockerContainerReconciler) getSecretValue(ctx context.Context, namespace, name, key string) (string, error) {
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, k8sclient.ObjectKey{Namespace: namespace, Name: name}, secret)
+	if err != nil {
+		return "", err
+	}
+	val, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("key %s not found in secret %s", key, name)
+	}
+	return string(val), nil
+}
+
+func (r *DockerContainerReconciler) uploadSecretToContainer(ctx context.Context, cli dockerclient.APIClient, namespace string, sv appv1alpha1.SecretVolume, containerID string) error {
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, k8sclient.ObjectKey{Namespace: namespace, Name: sv.SecretName}, secret); err != nil {
+		return err
+	}
+
+	// Create tar stream
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// Clean mount path and make it relative to root for tar entries
+	relPath := strings.TrimPrefix(sv.MountPath, "/")
+
+	for name, data := range secret.Data {
+		hdr := &tar.Header{
+			Name: filepath.Join(relPath, name),
+			Mode: 0444,
+			Size: int64(len(data)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+
+	// Upload to container root
+	return cli.CopyToContainer(ctx, containerID, "/", &buf, container.CopyToContainerOptions{})
 }
 
 func (r *DockerContainerReconciler) getAuthConfig(ctx context.Context, namespace, secretName string) (registry.AuthConfig, error) {
