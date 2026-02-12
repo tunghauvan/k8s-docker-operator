@@ -4,15 +4,15 @@ A Kubernetes operator designed to manage Docker containers across multiple Docke
 
 ## 🚀 Features
 
--   **DockerHost Management**: Define and connect to multiple Docker daemons (Local Unix socket or Remote TCP with TLS).
--   **DockerContainer Lifecycle**: Manage container state (Image, Command, Env, Restart Policy) using Kubernetes CRDs.
--   **Seamless Network Tunneling**: 
-    -   Automatically exposes Docker container ports as Kubernetes Services.
-    -   Uses a high-performance WebSocket-based tunnel.
-    -   **Tunnel Gateway**: A centralized gateway providing a single entry point (NodePort) while keeping application services internal (`ClusterIP`).
--   **Private Registry Support**: Pull images from private registries using standard Kubernetes `ImagePullSecrets`.
--   **Volume Management**: Bind host paths to containers.
--   **Optimized for Kind**: Built-in compatibility for local development with Kind clusters.
+| Feature | Description |
+| :--- | :--- |
+| **Multi-Host Support** | Connect to multiple Docker daemons via Unix socket or TCP with TLS. |
+| **Lifecycle Management** | Control container state (Image, Command, Env, Restart) via Kubernetes CRDs. |
+| **Automated Tunneling** | Expose Docker ports as Kubernetes Services using WebSocket-based reverse tunnels. |
+| **Tunnel Gateway** | Centralized NodePort entry point for all tunnels, keeping app services internal. |
+| **Private Registry Auth** | Use standard Kubernetes `ImagePullSecrets` for private image pulls. |
+| **Volume Management** | Easily bind host paths to containers for persistent data or configuration. |
+| **Kind Compatibility** | Specialized network modes for seamless integration with local Kind clusters. |
 
 ## 📦 Installation
 
