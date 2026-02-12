@@ -58,6 +58,7 @@ type DockerContainerSpec struct {
 	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 
 	// Services defines the ports to expose via Kubernetes Service
+	// Deprecated: Use DockerService CRD for network exposure instead.
 	// +optional
 	Services []ServicePort `json:"services,omitempty"`
 

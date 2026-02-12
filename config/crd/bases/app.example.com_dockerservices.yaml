@@ -1,0 +1,99 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: dockerservices.app.example.com
+spec:
+  group: app.example.com
+  names:
+    kind: DockerService
+    listKind: DockerServiceList
+    plural: dockerservices
+    singular: dockerservice
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DockerService is the Schema for the dockerservices API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DockerServiceSpec defines the desired state of DockerService
+            properties:
+              containerRef:
+                description: |-
+                  ContainerRef references the DockerContainer to expose.
+                  This must be in the same namespace.
+                type: string
+              networkMode:
+                description: |-
+                  NetworkMode for tunnel client containers (e.g. "kind", "host")
+                  If empty, defaults to "bridge" (or inherited logic)
+                type: string
+              ports:
+                description: Ports list of port mappings from container to K8s Service
+                items:
+                  properties:
+                    name:
+                      description: Name is the name of the port
+                      type: string
+                    port:
+                      description: Port is the port number to expose on the Kubernetes
+                        Service
+                      format: int32
+                      type: integer
+                    targetPort:
+                      description: TargetPort is the port number on the container
+                        to forward to
+                      format: int32
+                      type: integer
+                  required:
+                  - port
+                  - targetPort
+                  type: object
+                type: array
+            required:
+            - containerRef
+            - ports
+            type: object
+          status:
+            description: DockerServiceStatus defines the observed state of DockerService
+            properties:
+              message:
+                description: Message human readable status
+                type: string
+              phase:
+                description: Phase indicates the status of the service (Pending, Active,
+                  Error)
+                type: string
+              tunnelClients:
+                description: TunnelClients count of active tunnel client containers
+                type: integer
+              tunnelServerURL:
+                description: TunnelServerURL internal K8s URL of the tunnel server
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

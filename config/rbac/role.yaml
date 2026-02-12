@@ -39,6 +39,7 @@ rules:
   - app.example.com
   resources:
   - dockercontainers
+  - dockerservices
   verbs:
   - create
   - delete
@@ -51,12 +52,14 @@ rules:
   - app.example.com
   resources:
   - dockercontainers/finalizers
+  - dockerservices/finalizers
   verbs:
   - update
 - apiGroups:
   - app.example.com
   resources:
   - dockercontainers/status
+  - dockerservices/status
   verbs:
   - get
   - patch

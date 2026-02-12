@@ -19,6 +19,7 @@ import (
 	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockercontainer"
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockerhost"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockerservice"
 	"github.com/tunghauvan/k8s-docker-operator/internal/tunnel"
 )
 
@@ -46,8 +47,14 @@ func main() {
 		authToken := tunnelCmd.String("auth-token", "", "Server: Authentication token for tunnel clients")
 
 		// Client Args
+		// Client Args
 		serverURL := tunnelCmd.String("server-url", "ws://localhost:8081/ws", "Client: Tunnel Server URL")
 		targetAddr := tunnelCmd.String("target-addr", "localhost:6379", "Client: Target Address")
+		// Reuse authToken for client as well, or define a new one "client-token"
+		// To match reconciler's intent, let's allow auth-token to be used by client too.
+		// Since authToken is already defined above for server, we can reuse it if we parse flags.
+		// But flags are parsed below. The variable `authToken` is already declared.
+		// However, the help text says "Server: ...". Let's just use the same flag variable.
 
 		// Gateway Args
 		gatewayListenAddr := tunnelCmd.String("gateway-addr", ":8080", "Gateway: Listen Address")
@@ -63,7 +70,8 @@ func main() {
 				os.Exit(1)
 			}
 		} else if *mode == "client" {
-			cli := tunnel.NewClient(*serverURL, *targetAddr)
+			// Client needs token
+			cli := tunnel.NewClient(*serverURL, *targetAddr, *authToken)
 			if err := cli.Start(); err != nil {
 				setupLog.Error(err, "Tunnel Client failed")
 				os.Exit(1)
@@ -124,6 +132,15 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DockerHost")
+		os.Exit(1)
+	}
+
+	// Register DockerServiceReconciler
+	if err = (&dockerservice.DockerServiceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DockerService")
 		os.Exit(1)
 	}
 

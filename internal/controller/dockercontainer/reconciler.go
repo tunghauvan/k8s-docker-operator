@@ -120,18 +120,9 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// 5. Tunnel Logic
-	wsURL, err := r.reconcileTunnelServer(ctx, dockerContainer)
-	if err != nil {
-		l.Error(err, "Failed to reconcile tunnel server")
-		return ctrl.Result{}, err
-	}
-
-	err = r.reconcileTunnelClient(ctx, cli, dockerContainer, wsURL)
-	if err != nil {
-		l.Error(err, "Failed to reconcile tunnel client")
-		return ctrl.Result{}, err
-	}
+	// 5. Tunnel Logic --> Moved to DockerService controller
+	// wsURL, err := r.reconcileTunnelServer(ctx, dockerContainer) ...
+	// err = r.reconcileTunnelClient(ctx, cli, dockerContainer, wsURL) ...
 
 	return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 }

@@ -49,7 +49,14 @@ func RunGateway(listenAddr string) error {
 			if targetURL.Path != "" {
 				req.URL.Path = targetURL.Path
 			}
-			req.URL.RawQuery = targetURL.RawQuery
+
+			// Set query: default to target's query, but append 'token' from original request if present
+			targetQuery := targetURL.Query()
+			originalQuery := req.URL.Query()
+			if token := originalQuery.Get("token"); token != "" {
+				targetQuery.Set("token", token)
+			}
+			req.URL.RawQuery = targetQuery.Encode()
 
 			// Important: Set Host header so the backend knows who it is
 			req.Host = targetURL.Host

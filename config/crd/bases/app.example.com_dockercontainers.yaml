@@ -167,7 +167,9 @@ spec:
                   type: object
                 type: array
               services:
-                description: Services defines the ports to expose via Kubernetes Service
+                description: |-
+                  Services defines the ports to expose via Kubernetes Service
+                  Deprecated: Use DockerService CRD for network exposure instead.
                 items:
                   properties:
                     name:

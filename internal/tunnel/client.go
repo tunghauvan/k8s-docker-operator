@@ -15,12 +15,14 @@ import (
 type Client struct {
 	serverAddr string // WebSocket URL (e.g. ws://tunnel-server/ws)
 	targetAddr string // Target Container Address (e.g. localhost:6379)
+	token      string // Authentication Token
 }
 
-func NewClient(serverAddr, targetAddr string) *Client {
+func NewClient(serverAddr, targetAddr, token string) *Client {
 	return &Client{
 		serverAddr: serverAddr,
 		targetAddr: targetAddr,
+		token:      token,
 	}
 }
 
@@ -36,7 +38,11 @@ func (c *Client) Start() error {
 
 func (c *Client) connectAndServe() error {
 	log.Printf("Connecting to Tunnel Server: %s", c.serverAddr)
-	ws, _, err := websocket.DefaultDialer.Dial(c.serverAddr, http.Header{})
+	header := http.Header{}
+	if c.token != "" {
+		header.Set("X-Tunnel-Token", c.token)
+	}
+	ws, _, err := websocket.DefaultDialer.Dial(c.serverAddr, header)
 	if err != nil {
 		return err
 	}
