@@ -16,7 +16,9 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -45,8 +47,14 @@ import (
 // DockerContainerReconciler reconciles a DockerContainer object
 type DockerContainerReconciler struct {
 	k8sclient.Client
-	Scheme       *runtime.Scheme
-	DockerClient dockerclient.APIClient
+	Scheme        *runtime.Scheme
+	DockerClient  dockerclient.APIClient
+	dockerClients sync.Map // cache: DockerHost name → *cachedClient
+}
+
+type cachedClient struct {
+	client    dockerclient.APIClient
+	createdAt time.Time
 }
 
 //+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers,verbs=get;list;watch;create;update;patch;delete
@@ -81,12 +89,6 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err != nil {
 		l.Error(err, "Failed to create docker client")
 		return ctrl.Result{}, err
-	}
-	// Close client if it's not the injected/cached one
-	// Note: In real world, we might want to cache clients.
-	// For now, if it's not the test client, we close it.
-	if r.DockerClient == nil || (dockerContainer.Spec.DockerHostRef != "" && cli != r.DockerClient) {
-		defer cli.Close()
 	}
 
 	// 3. Finalizer Logic
@@ -265,6 +267,17 @@ func needsRecreate(inspected types.ContainerJSON, spec *appv1alpha1.DockerContai
 		}
 	}
 
+	// 5. Resource limits mismatch
+	if spec.Resources != nil && inspected.HostConfig != nil {
+		desired := buildDockerResources(spec.Resources)
+		if desired.NanoCPUs != inspected.HostConfig.Resources.NanoCPUs {
+			return true
+		}
+		if desired.Memory != inspected.HostConfig.Resources.Memory {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -293,6 +306,51 @@ func buildDockerHealthCheck(hc *appv1alpha1.HealthCheckConfig) *container.Health
 	}
 
 	return config
+}
+
+// buildDockerResources converts CRD ResourceRequirements to Docker container.Resources
+func buildDockerResources(r *appv1alpha1.ResourceRequirements) container.Resources {
+	if r == nil {
+		return container.Resources{}
+	}
+	res := container.Resources{}
+	if r.CPULimit != "" {
+		cpuFloat, err := strconv.ParseFloat(r.CPULimit, 64)
+		if err == nil {
+			res.NanoCPUs = int64(cpuFloat * 1e9)
+		}
+	}
+	if r.MemoryLimit != "" {
+		res.Memory = parseMemoryString(r.MemoryLimit)
+	}
+	return res
+}
+
+// parseMemoryString parses memory strings like "256m", "1g", "512000" into bytes
+func parseMemoryString(s string) int64 {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0
+	}
+
+	multiplier := int64(1)
+	switch {
+	case strings.HasSuffix(s, "g"):
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "g")
+	case strings.HasSuffix(s, "m"):
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "m")
+	case strings.HasSuffix(s, "k"):
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "k")
+	}
+
+	val, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return val * multiplier
 }
 
 func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
@@ -355,6 +413,11 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(cr.Spec.RestartPolicy)},
 		PortBindings:  nat.PortMap{},
 		Binds:         []string{},
+	}
+
+	// Handle Resource Limits
+	if cr.Spec.Resources != nil {
+		hostConfig.Resources = buildDockerResources(cr.Spec.Resources)
 	}
 
 	// Handle Volumes
@@ -498,18 +561,28 @@ func (r *DockerContainerReconciler) getAuthConfig(ctx context.Context, namespace
 
 func (r *DockerContainerReconciler) deleteExternalResources(ctx context.Context, cli dockerclient.APIClient, cr *appv1alpha1.DockerContainer) error {
 	l := log.FromContext(ctx)
-	// Find container ID by name if not in status or just try by name
-	// But ContainerRemove takes ID or Name.
-	// Try by Name
+	// Remove main container
 	err := cli.ContainerRemove(ctx, cr.Spec.ContainerName, container.RemoveOptions{Force: true})
-	if err != nil {
-		if dockerclient.IsErrNotFound(err) {
-			return nil // Already gone
-		}
+	if err != nil && !dockerclient.IsErrNotFound(err) {
 		l.Error(err, "Failed to remove container")
 		return err
 	}
 	l.Info("Container removed", "Name", cr.Spec.ContainerName)
+
+	// Remove indexed tunnel client containers
+	for i := range cr.Spec.Services {
+		tunnelName := fmt.Sprintf("%s-tunnel-%d", cr.Spec.ContainerName, i)
+		if err := cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true}); err != nil && !dockerclient.IsErrNotFound(err) {
+			l.Error(err, "Failed to remove tunnel container", "Name", tunnelName)
+		}
+	}
+
+	// Also try legacy single tunnel name for backward compatibility
+	legacyTunnel := cr.Spec.ContainerName + "-tunnel"
+	if err := cli.ContainerRemove(ctx, legacyTunnel, container.RemoveOptions{Force: true}); err != nil && !dockerclient.IsErrNotFound(err) {
+		l.Error(err, "Failed to remove legacy tunnel", "Name", legacyTunnel)
+	}
+
 	return nil
 }
 
@@ -520,7 +593,7 @@ func (r *DockerContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// getDockerClient resolves the Docker Client to use.
+// getDockerClient resolves the Docker Client to use, with caching for remote hosts.
 func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *appv1alpha1.DockerContainer) (dockerclient.APIClient, error) {
 	// Case 1: Local (Default)
 	if cr.Spec.DockerHostRef == "" {
@@ -531,7 +604,18 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 		return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	}
 
-	// Case 2: Remote DockerHost
+	// Case 2: Remote DockerHost — check cache first
+	cacheKey := cr.Namespace + "/" + cr.Spec.DockerHostRef
+	if cached, ok := r.dockerClients.Load(cacheKey); ok {
+		cc := cached.(*cachedClient)
+		if time.Since(cc.createdAt) < 5*time.Minute {
+			return cc.client, nil
+		}
+		// Expired — close and recreate
+		cc.client.Close()
+		r.dockerClients.Delete(cacheKey)
+	}
+
 	host := &appv1alpha1.DockerHost{}
 	hostKey := k8sclient.ObjectKey{
 		Namespace: cr.Namespace,
@@ -570,7 +654,18 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 		opts = append(opts, dockerclient.WithHTTPClient(httpClient))
 	}
 
-	return dockerclient.NewClientWithOpts(opts...)
+	newClient, err := dockerclient.NewClientWithOpts(opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache
+	r.dockerClients.Store(cacheKey, &cachedClient{
+		client:    newClient,
+		createdAt: time.Now(),
+	})
+
+	return newClient, nil
 }
 
 // generateToken creates a random hex token for tunnel authentication
@@ -636,10 +731,6 @@ func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, c
 		return nil // Wait for next reconcile
 	}
 
-	// Support single port for MVP
-	svc := cr.Spec.Services[0]
-	targetPort := svc.TargetPort
-
 	// Get Main Container IP
 	mainContainer, err := cli.ContainerInspect(ctx, cr.Spec.ContainerName)
 	if err != nil {
@@ -650,11 +741,8 @@ func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, c
 		return err
 	}
 
-	// Determine Target Address
-	// If using default bridge, we can use IP.
-	// We assume main container is running.
+	// Determine Target IP
 	targetIP := ""
-	// Iterate networks (usually "bridge")
 	for _, netConf := range mainContainer.NetworkSettings.Networks {
 		targetIP = netConf.IPAddress
 		break
@@ -663,28 +751,12 @@ func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, c
 		l.Info("Main container has no IP yet")
 		return nil
 	}
-	targetAddr := fmt.Sprintf("%s:%d", targetIP, targetPort)
 
-	// Tunnel Client Name
-	tunnelName := cr.Spec.ContainerName + "-tunnel"
-
-	// Check if already running
-	_, err = cli.ContainerInspect(ctx, tunnelName)
-	if err == nil {
-		// Already exists. Should check config? For now assume OK if running.
-		return nil
-	} else if !dockerclient.IsErrNotFound(err) {
-		return err
-	}
-
-	// Pull Image (Operator Image)
-	// We assume the Docker Host can pull this image.
+	// Pull Image (Operator Image) — only once for all ports
 	img := os.Getenv("OPERATOR_IMAGE")
 	if img == "" {
 		img = "controller:latest"
 	}
-	// Pulling might fail if local image and not in registry.
-	// Try pull, ignore error (might be local).
 	reader, err := cli.ImagePull(ctx, img, image.PullOptions{})
 	if err == nil {
 		io.Copy(io.Discard, reader)
@@ -693,68 +765,68 @@ func (r *DockerContainerReconciler) reconcileTunnelClient(ctx context.Context, c
 		l.Info("Failed to pull tunnel image (might be local)", "error", err)
 	}
 
-	// Gateway Logic:
+	// Gateway Logic
 	gatewayPort := 30000
 	gatewayHost := "localhost"
 
 	netMode := cr.Spec.NetworkMode
 	if netMode == "kind" {
-		// Discover Kind Control Plane Node Name
 		nodes := &corev1.NodeList{}
 		if err := r.List(ctx, nodes, client.MatchingLabels{"node-role.kubernetes.io/control-plane": ""}); err == nil && len(nodes.Items) > 0 {
 			gatewayHost = nodes.Items[0].Name
 		}
 	}
 
-	// Get auth token for tunnel authentication
+	// Get auth token
 	authToken, err := r.ensureTunnelAuthSecret(ctx, cr)
 	if err != nil {
 		l.Error(err, "Failed to ensure tunnel auth secret")
 		return err
 	}
 
-	// Target URL: ws://tunnel-nginx-basic.default.svc:8081/ws
 	targetQuery := url.QueryEscape(wsURL)
-
-	// Gateway Connection URL with auth token: ws://gateway:30000/ws?target=...&token=...
 	clientConnectURL := fmt.Sprintf("ws://%s:%d/ws?target=%s&token=%s", gatewayHost, gatewayPort, targetQuery, url.QueryEscape(authToken))
 
-	// Create Tunnel Client Container
-	config := &container.Config{
-		Image: img,
-		Cmd: []string{
-			"tunnel",
-			"-mode", "client",
-			"-server-url", clientConnectURL,
-			"-target-addr", targetAddr,
-		},
+	// Create one tunnel client per service port
+	for i, svc := range cr.Spec.Services {
+		targetAddr := fmt.Sprintf("%s:%d", targetIP, svc.TargetPort)
+		tunnelName := fmt.Sprintf("%s-tunnel-%d", cr.Spec.ContainerName, i)
+
+		// Check if already running
+		_, err = cli.ContainerInspect(ctx, tunnelName)
+		if err == nil {
+			continue // Already exists
+		} else if !dockerclient.IsErrNotFound(err) {
+			return err
+		}
+
+		config := &container.Config{
+			Image: img,
+			Cmd: []string{
+				"tunnel",
+				"-mode", "client",
+				"-server-url", clientConnectURL,
+				"-target-addr", targetAddr,
+			},
+		}
+
+		hostConfig := &container.HostConfig{
+			RestartPolicy: container.RestartPolicy{Name: "always"},
+			NetworkMode:   container.NetworkMode(netMode),
+		}
+
+		resp, err := cli.ContainerCreate(ctx, config, hostConfig, nil, nil, tunnelName)
+		if err != nil {
+			return err
+		}
+
+		if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			return err
+		}
+
+		l.Info("Tunnel Client started", "ID", resp.ID, "Port", svc.TargetPort, "Index", i)
 	}
 
-	// Network Mode
-	// netMode already defined above
-	if netMode == "" {
-		// Default behavior: empty is Bridge (Docker default).
-		// Previously we hardcoded "host" for failed Kind fix.
-		// Now we rely on user specifying "kind" or "host".
-		// For backward compatibility with previous attempt, maybe we should stick with empty?
-		// Empty is safer for standard Docker.
-	}
-
-	hostConfig := &container.HostConfig{
-		RestartPolicy: container.RestartPolicy{Name: "always"},
-		NetworkMode:   container.NetworkMode(netMode),
-	}
-
-	resp, err := cli.ContainerCreate(ctx, config, hostConfig, nil, nil, tunnelName)
-	if err != nil {
-		return err
-	}
-
-	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return err
-	}
-
-	l.Info("Tunnel Client started", "ID", resp.ID)
 	return nil
 }
 
@@ -834,7 +906,22 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 		}
 	}
 
-	// 3. Service
+	// 3. Service — map all service ports
+	svcPorts := []corev1.ServicePort{
+		{Name: "ws", Port: 8081, TargetPort: intstr.FromInt(8081)},
+	}
+	for i, sp := range cr.Spec.Services {
+		portName := sp.Name
+		if portName == "" {
+			portName = fmt.Sprintf("traffic-%d", i)
+		}
+		svcPorts = append(svcPorts, corev1.ServicePort{
+			Name:       portName,
+			Port:       sp.Port,
+			TargetPort: intstr.FromInt(8080),
+		})
+	}
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -843,10 +930,7 @@ func (r *DockerContainerReconciler) reconcileTunnelServer(ctx context.Context, c
 		Spec: corev1.ServiceSpec{
 			Selector: labels,
 			Type:     corev1.ServiceTypeClusterIP,
-			Ports: []corev1.ServicePort{
-				{Name: "traffic", Port: 80, TargetPort: intstr.FromInt(8080)},
-				{Name: "ws", Port: 8081, TargetPort: intstr.FromInt(8081)},
-			},
+			Ports:    svcPorts,
 		},
 	}
 	if err := ctrl.SetControllerReference(cr, svc, r.Scheme); err != nil {

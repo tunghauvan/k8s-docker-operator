@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"net/http"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -79,8 +80,10 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var logsAddr string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&logsAddr, "logs-bind-address", ":8082", "The address the logs endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -106,10 +109,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&dockercontainer.DockerContainerReconciler{
+	reconciler := &dockercontainer.DockerContainerReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}
+
+	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DockerContainer")
 		os.Exit(1)
 	}
@@ -132,6 +137,16 @@ func main() {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
+
+	// Start container logs HTTP server
+	go func() {
+		logsMux := http.NewServeMux()
+		logsMux.Handle("/logs", reconciler.LogsHandler())
+		setupLog.Info("starting logs server", "addr", logsAddr)
+		if err := http.ListenAndServe(logsAddr, logsMux); err != nil {
+			setupLog.Error(err, "logs server failed")
+		}
+	}()
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

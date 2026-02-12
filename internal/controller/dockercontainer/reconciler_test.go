@@ -176,7 +176,7 @@ func TestDockerContainerReconciler_Reconcile_Tunnel(t *testing.T) {
 	// Verify Tunnel Container Created
 	found := false
 	for _, created := range mockDocker.Created {
-		if created == "my-web-app-tunnel" {
+		if created == "my-web-app-tunnel-0" {
 			found = true
 			break
 		}

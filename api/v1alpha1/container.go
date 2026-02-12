@@ -76,6 +76,10 @@ type DockerContainerSpec struct {
 	// HealthCheck defines a Docker health check for the container
 	// +optional
 	HealthCheck *HealthCheckConfig `json:"healthCheck,omitempty"`
+
+	// Resources defines CPU and Memory limits for the container
+	// +optional
+	Resources *ResourceRequirements `json:"resources,omitempty"`
 }
 
 // HealthCheckConfig defines health check parameters for the container
@@ -91,6 +95,16 @@ type HealthCheckConfig struct {
 	// Retries before reporting unhealthy
 	// +optional
 	Retries int `json:"retries,omitempty"`
+}
+
+// ResourceRequirements defines resource limits for a container
+type ResourceRequirements struct {
+	// CPULimit in cores (e.g. "0.5" = half a core, "2" = 2 cores)
+	// +optional
+	CPULimit string `json:"cpuLimit,omitempty"`
+	// MemoryLimit in bytes with optional suffix (e.g. "256m", "1g")
+	// +optional
+	MemoryLimit string `json:"memoryLimit,omitempty"`
 }
 
 // EnvVar defines an environment variable

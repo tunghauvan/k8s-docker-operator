@@ -1,0 +1,23 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: p1-test
+  namespace: default
+spec:
+  containerName: p1-nginx-test
+  image: nginx:latest
+  ports:
+    - "8888:80"
+  env:
+    - "NGINX_HOST=localhost"
+  restartPolicy: always
+  resources:
+    cpuLimit: "0.5"
+    memoryLimit: "256m"
+  healthCheck:
+    test:
+      - "CMD-SHELL"
+      - "curl -f http://localhost/ || exit 1"
+    interval: "10s"
+    timeout: "5s"
+    retries: 3
