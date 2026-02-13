@@ -43,6 +43,7 @@ graph TB
 | Rolling Updates | ❌ Manual | ⚠️ Recreate only | ✅ Deployment strategy |
 | Multi-container Pod | ❌ N/A | ⚠️ Separate CRs | ✅ Native sidecar support |
 | Init Containers | ❌ N/A | ❌ Not supported | ✅ Native |
+| **Job / One-off Tasks** | ⚠️ `docker run` (manual) | ✅ **DockerJob CRD** | ✅ Kubernetes Job |
 
 ### Health & Self-Healing
 

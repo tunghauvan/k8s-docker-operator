@@ -8,6 +8,7 @@ A Kubernetes operator designed to manage Docker containers across multiple Docke
 | :--- | :--- |
 | **Multi-Host Support** | Connect to multiple Docker daemons via Unix socket or TCP with TLS. |
 | **Lifecycle Management** | Control container state (Image, Command, Env, Restart) via Kubernetes CRDs. |
+| **Job Runs** | Run one-off tasks with exit code tracking, retries, timeout, and TTL cleanup. |
 | **Secret Integration** | Map Kubernetes Secrets to container environment variables or files. |
 | **Automated Tunneling** | Expose Docker ports as Kubernetes Services using WebSocket-based reverse tunnels. |
 | **Tunnel Gateway** | Centralized NodePort entry point for all tunnels, keeping app services internal. |
@@ -124,6 +125,38 @@ spec:
     - secretName: my-test-secret
       mountPath: "/etc/secrets"
 ```
+
+### 5. Running a One-Off Job
+
+Run a one-off task (like a database migration or batch script) that tracks completion:
+
+```yaml
+apiVersion: app.example.com/v1alpha1
+kind: DockerJob
+metadata:
+  name: db-migrate
+spec:
+  image: "my-app:latest"
+  command: ["./migrate", "--direction", "up"]
+  dockerHostRef: "remote-host"
+  restartPolicy: Never
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 600
+  envVars:
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: db-credentials
+          key: connection-string
+```
+
+The operator will:
+1.  Pull the image and start the container.
+2.  Monitor until the container exits.
+3.  Report `Succeeded` (exit 0) or `Failed` (non-zero) in `status.phase`.
+4.  Retry up to `backoffLimit` times on failure.
+5.  Clean up the container after `ttlSecondsAfterFinished`.
 
 ## 🏗 Architecture (Tunnel Gateway)
 

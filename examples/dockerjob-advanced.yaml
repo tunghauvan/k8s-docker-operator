@@ -1,0 +1,22 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerJob
+metadata:
+  name: db-migration
+spec:
+  image: "my-app:latest"
+  command: ["./migrate", "--direction", "up"]
+  dockerHostRef: "remote-host"
+  imagePullSecret: "my-registry-secret"
+  restartPolicy: Never
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 600
+  envVars:
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: db-credentials
+          key: connection-string
+  resources:
+    cpuLimit: "1"
+    memoryLimit: "512m"

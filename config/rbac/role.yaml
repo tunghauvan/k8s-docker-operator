@@ -39,6 +39,7 @@ rules:
   - app.example.com
   resources:
   - dockercontainers
+  - dockerjobs
   - dockerservices
   verbs:
   - create
@@ -52,6 +53,7 @@ rules:
   - app.example.com
   resources:
   - dockercontainers/finalizers
+  - dockerjobs/finalizers
   - dockerservices/finalizers
   verbs:
   - update
@@ -59,6 +61,7 @@ rules:
   - app.example.com
   resources:
   - dockercontainers/status
+  - dockerjobs/status
   - dockerservices/status
   verbs:
   - get

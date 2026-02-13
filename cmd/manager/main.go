@@ -19,6 +19,7 @@ import (
 	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockercontainer"
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockerhost"
+	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockerjob"
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/dockerservice"
 	"github.com/tunghauvan/k8s-docker-operator/internal/tunnel"
 )
@@ -141,6 +142,15 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DockerService")
+		os.Exit(1)
+	}
+
+	// Register DockerJobReconciler
+	if err = (&dockerjob.DockerJobReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DockerJob")
 		os.Exit(1)
 	}
 

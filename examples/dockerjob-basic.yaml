@@ -1,0 +1,8 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerJob
+metadata:
+  name: hello-world
+spec:
+  image: "alpine:latest"
+  command: ["echo", "Hello from DockerJob!"]
+  restartPolicy: Never

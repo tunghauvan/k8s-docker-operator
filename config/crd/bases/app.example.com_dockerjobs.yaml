@@ -1,0 +1,235 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: dockerjobs.app.example.com
+spec:
+  group: app.example.com
+  names:
+    kind: DockerJob
+    listKind: DockerJobList
+    plural: dockerjobs
+    singular: dockerjob
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.exitCode
+      name: Exit Code
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          DockerJob is the Schema for the dockerjobs API.
+          It runs a one-off container on a Docker host and tracks its completion.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DockerJobSpec defines the desired state of DockerJob
+            properties:
+              activeDeadlineSeconds:
+                description: |-
+                  ActiveDeadlineSeconds specifies a timeout in seconds. If the job does not
+                  complete within this duration, it is terminated and marked as Failed.
+                format: int64
+                type: integer
+              args:
+                description: Args are arguments to the command (Docker CMD)
+                items:
+                  type: string
+                type: array
+              backoffLimit:
+                description: |-
+                  BackoffLimit specifies the number of retries before marking this job as failed.
+                  Default: 0 (no retries)
+                format: int32
+                type: integer
+              command:
+                description: Command to run in the container (Docker ENTRYPOINT)
+                items:
+                  type: string
+                type: array
+              containerName:
+                description: |-
+                  ContainerName is the name of the container on the docker host.
+                  Defaults to "job-<metadata.name>" if empty.
+                type: string
+              dockerHostRef:
+                description: |-
+                  DockerHostRef is the name of the DockerHost CR to use.
+                  If empty, defaults to the local Docker socket.
+                type: string
+              env:
+                description: Env list of environment variables (e.g. "KEY=VALUE")
+                items:
+                  type: string
+                type: array
+              envVars:
+                description: EnvVars list of environment variables with support for
+                  ValueFrom (K8s Secrets)
+                items:
+                  description: EnvVar defines an environment variable
+                  properties:
+                    name:
+                      description: Name of the environment variable
+                      type: string
+                    value:
+                      description: Value of the environment variable (literal)
+                      type: string
+                    valueFrom:
+                      description: ValueFrom source for the environment variable's
+                        value
+                      properties:
+                        secretKeyRef:
+                          description: SecretKeyRef selects a key of a secret in the
+                            target container's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from. Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              description: Name of the referent
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+              image:
+                description: Image is the Docker image to run
+                type: string
+              imagePullSecret:
+                description: ImagePullSecret is the name of the Secret containing
+                  Docker registry credentials
+                type: string
+              resources:
+                description: Resources defines CPU and Memory limits for the container
+                properties:
+                  cpuLimit:
+                    description: CPULimit in cores (e.g. "0.5" = half a core, "2"
+                      = 2 cores)
+                    type: string
+                  memoryLimit:
+                    description: MemoryLimit in bytes with optional suffix (e.g. "256m",
+                      "1g")
+                    type: string
+                type: object
+              restartPolicy:
+                description: |-
+                  RestartPolicy for the job container. Only "Never" or "OnFailure" are valid.
+                  Default: "Never"
+                type: string
+              secretVolumes:
+                description: SecretVolumes list of Kubernetes Secrets to mount as
+                  files
+                items:
+                  description: SecretVolume defines a mapping from a K8s Secret to
+                    a directory in the container
+                  properties:
+                    mountPath:
+                      description: MountPath is the absolute path in the container
+                        where the secret should be mounted
+                      type: string
+                    secretName:
+                      description: SecretName is the name of the Kubernetes Secret
+                      type: string
+                  required:
+                  - mountPath
+                  - secretName
+                  type: object
+                type: array
+              ttlSecondsAfterFinished:
+                description: |-
+                  TTLSecondsAfterFinished specifies the number of seconds after job completion
+                  (Succeeded or Failed) before the Docker container is cleaned up.
+                  If unset, the container is not automatically removed.
+                format: int32
+                type: integer
+              volumeMounts:
+                description: VolumeMounts list of volumes to mount into the container
+                items:
+                  description: VolumeMount defines a volume mount
+                  properties:
+                    containerPath:
+                      description: ContainerPath is the path in the container
+                      type: string
+                    hostPath:
+                      description: HostPath is the path on the host
+                      type: string
+                    readOnly:
+                      description: ReadOnly if true, mounts the volume as read-only
+                      type: boolean
+                  required:
+                  - containerPath
+                  - hostPath
+                  type: object
+                type: array
+            required:
+            - image
+            type: object
+          status:
+            description: DockerJobStatus defines the observed state of DockerJob
+            properties:
+              attempts:
+                description: Attempts is the number of times the container has been
+                  run
+                format: int32
+                type: integer
+              completionTime:
+                description: CompletionTime is the time the job container finished
+                format: date-time
+                type: string
+              containerID:
+                description: ContainerID is the Docker container ID
+                type: string
+              exitCode:
+                description: ExitCode is the exit code of the container process
+                format: int32
+                type: integer
+              message:
+                description: Message is a human-readable message indicating details
+                  about the job status
+                type: string
+              phase:
+                description: Phase is the current phase of the job (Pending, Running,
+                  Succeeded, Failed)
+                type: string
+              startTime:
+                description: StartTime is the time the job container was started
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
