@@ -39,6 +39,8 @@ rules:
   - app.example.com
   resources:
   - dockercontainers
+  - dockerdeployments
+  - dockerhosts
   - dockerjobs
   - dockerservices
   verbs:
@@ -53,34 +55,24 @@ rules:
   - app.example.com
   resources:
   - dockercontainers/finalizers
+  - dockerdeployments/finalizers
+  - dockerhosts/finalizers
   - dockerjobs/finalizers
   - dockerservices/finalizers
-  - dockerhosts/finalizers
   verbs:
   - update
 - apiGroups:
   - app.example.com
   resources:
   - dockercontainers/status
+  - dockerdeployments/status
+  - dockerhosts/status
   - dockerjobs/status
   - dockerservices/status
-  - dockerhosts/status
   verbs:
   - get
   - patch
   - update
-- apiGroups:
-  - app.example.com
-  resources:
-  - dockerhosts
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - apps
   resources:

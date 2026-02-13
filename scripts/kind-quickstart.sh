@@ -13,10 +13,17 @@ echo "🚀 Starting Kind Quickstart for k8s-docker-operator (v${VERSION})..."
 echo "📦 Building Docker image..."
 make docker-build
 
-# 2. Recreate Kind Cluster
-echo "🔄 Recreating Kind cluster..."
-kind delete cluster --name ${CLUSTER_NAME}
-kind create cluster --name ${CLUSTER_NAME} --config kind-config.yaml
+# Re-read version after bump
+VERSION=$(cat VERSION)
+FULL_IMAGE="${IMAGE_NAME}:${VERSION}"
+
+# 2. Check/Create Kind Cluster
+if kind get clusters | grep -q "^${CLUSTER_NAME}$"; then
+  echo "✅ Cluster '${CLUSTER_NAME}' already exists. Skipping creation."
+else
+  echo "🚀 Creating Kind cluster..."
+  kind create cluster --name ${CLUSTER_NAME} --config kind-config.yaml
+fi
 
 # 3. Load Image into Kind
 echo "🚚 Loading image into Kind..."

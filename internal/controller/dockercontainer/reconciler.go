@@ -253,7 +253,7 @@ func needsRecreate(inspected types.ContainerJSON, spec *appv1alpha1.DockerContai
 
 	// 4. RestartPolicy mismatch
 	if spec.RestartPolicy != "" && inspected.HostConfig != nil {
-		if string(inspected.HostConfig.RestartPolicy.Name) != spec.RestartPolicy {
+		if strings.ToLower(string(inspected.HostConfig.RestartPolicy.Name)) != strings.ToLower(spec.RestartPolicy) {
 			return true
 		}
 	}
@@ -401,7 +401,7 @@ func (r *DockerContainerReconciler) createAndStartContainer(ctx context.Context,
 
 	// Configure HostConfig
 	hostConfig := &container.HostConfig{
-		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(cr.Spec.RestartPolicy)},
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(strings.ToLower(cr.Spec.RestartPolicy))},
 		PortBindings:  nat.PortMap{},
 		Binds:         []string{},
 	}

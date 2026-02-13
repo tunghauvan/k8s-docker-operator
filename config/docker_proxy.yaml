@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
       - name: socat
-        image: alpine/socat
-        args: ["tcp-listen:2375,fork,reuseaddr", "unix-connect:/var/run/docker.sock"]
+        image: alpine:latest
+        command: ["/bin/sh", "-c", "apk add --no-cache socat && socat tcp-listen:2375,fork,reuseaddr unix-connect:/var/run/docker.sock"]
         volumeMounts:
         - name: docker-sock
           mountPath: /var/run/docker.sock

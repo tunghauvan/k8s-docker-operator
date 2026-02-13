@@ -1,0 +1,22 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerDeployment
+metadata:
+  name: nginx-scaled
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx-scaled
+  template:
+    metadata:
+      labels:
+        app: nginx-scaled
+    spec:
+      image: "nginx:latest"
+      containerName: "nginx-worker" # Will be suffixed by controller
+      restartPolicy: "Always"
+      # ports:
+      #   - "80:80" # Note: This might conflict if on same host!
+      # Better for scaling: Don't bind host ports if on same host, 
+      # or rely on random host ports (not supported yet in simple spec),
+      # OR rely on the Tunnel IP (ClusterIP) which works fine.
