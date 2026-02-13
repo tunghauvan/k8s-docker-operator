@@ -18,15 +18,17 @@ type Server struct {
 	wsAddr     string // WebSocket Address for Client (e.g. :8081)
 	authToken  string // Shared secret for authenticating tunnel clients
 	sessions   []*yamux.Session
+	targets    []string
 	rrIndex    uint64
 	mu         sync.Mutex
 }
 
-func NewServer(listenAddr, wsAddr, authToken string) *Server {
+func NewServer(listenAddr, wsAddr, authToken string, targets []string) *Server {
 	return &Server{
 		listenAddr: listenAddr,
 		wsAddr:     wsAddr,
 		authToken:  authToken,
+		targets:    targets,
 		sessions:   make([]*yamux.Session, 0),
 	}
 }
@@ -63,6 +65,11 @@ func (s *Server) acceptTCP(ln net.Listener) {
 }
 
 func (s *Server) handleTCP(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("handleTCP PANIC: %v", r)
+		}
+	}()
 	defer conn.Close()
 	log.Printf("handleTCP: Accepted connection from %s", conn.RemoteAddr())
 
@@ -73,31 +80,58 @@ func (s *Server) handleTCP(conn net.Conn) {
 		return
 	}
 
-	// Round Robin Selection
-	idx := s.rrIndex % uint64(len(s.sessions))
-	sess := s.sessions[idx]
+	if len(s.targets) == 0 {
+		s.mu.Unlock()
+		log.Println("handleTCP: No targets configured, dropping connection")
+		return
+	}
+
+	// RR Target
+	targetIdx := s.rrIndex % uint64(len(s.targets))
+	target := s.targets[targetIdx]
+
+	// RR Session (if multiple clients connected via LoadBalancer redundancy)
+	sessionIdx := s.rrIndex % uint64(len(s.sessions))
+	sess := s.sessions[sessionIdx]
+
 	s.rrIndex++
 	s.mu.Unlock()
 
-	log.Printf("handleTCP: Selected session %d", idx)
+	log.Printf("handleTCP: Selected target %s via session %d", target, sessionIdx)
 
 	// Open a stream to the client
-	// This tells the client "I have a connection, carry it for me"
 	stream, err := sess.Open()
 	if err != nil {
 		log.Printf("handleTCP: Failed to open stream: %v", err)
 		return
 	}
 	defer stream.Close()
-	log.Printf("handleTCP: Stream opened successfully")
+
+	// Write Target Header
+	// Format: "IP:Port\n"
+	_, err = stream.Write([]byte(target + "\n"))
+	if err != nil {
+		log.Printf("handleTCP: Failed to write target header: %v", err)
+		return
+	}
 
 	// Pipe bidirectional
 	errChan := make(chan error, 2)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("handleTCP copy1 PANIC: %v", r)
+			}
+		}()
 		_, err := io.Copy(stream, conn)
 		errChan <- err
 	}()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("handleTCP copy2 PANIC: %v", r)
+			}
+		}()
 		_, err := io.Copy(conn, stream)
 		errChan <- err
 	}()
@@ -111,6 +145,11 @@ var upgrader = websocket.Upgrader{
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("handleWS PANIC: %v", r)
+		}
+	}()
 	// Validate auth token if configured
 	if s.authToken != "" {
 		token := r.URL.Query().Get("token")
@@ -132,8 +171,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	conn := NewWebSocketConn(ws)
 
+	// Custom Yamux config for KeepAlive
+	yamuxConfig := yamux.DefaultConfig()
+	yamuxConfig.EnableKeepAlive = true
+	yamuxConfig.KeepAliveInterval = 10 * time.Second
+
 	// We use yamux.Server here. The Client will use yamux.Client.
-	session, err := yamux.Server(conn, nil)
+	session, err := yamux.Server(conn, yamuxConfig)
 	if err != nil {
 		log.Printf("Yamux Server error: %v", err)
 		conn.Close()

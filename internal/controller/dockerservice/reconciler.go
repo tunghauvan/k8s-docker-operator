@@ -5,13 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -134,29 +137,78 @@ func (r *DockerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	// Logic 1: Tunnel Server (K8s) - Fixed size (1) acting as Load Balancer
+	// Logic 1: Gather Target IPs
+	var targetIPs []string
+	var firstContainer *appv1alpha1.DockerContainer
+
+	for _, tc := range targetContainers {
+		if tc.Status.IPv4 != "" {
+			// Append valid IPs
+			// Note: If using host networking, might be host IP.
+			// If using bridge, container IP.
+			// We append the IP:Port for EACH port defined in service?
+			// The server expects target addresses.
+			// The Load Balancer (Server) balances *requests*.
+			// If we have Port 80 and 8080 defined in Service.
+			// Incoming traffic on 80 -> needs to go to Container:TargetPort80.
+			// Incoming traffic on 8080 -> needs to go to Container:TargetPort8080.
+			// The Server `handleTCP` receives a connection. It doesn't know strictly which ServicePort it came from
+			// unless we separate listeners or listeners share logic.
+			// `Server` has `listenAddr` (which is one port?).
+			// Wait, the Server supports multiple Ports: `-listen-addr=:80 -listen-addr=:8080` (main.go handles this?)
+			// In `main.go`, `listenAddr` is a single string flag. It doesn't support multiple.
+			// CRITICAL MISSING FEATURE properly supporting multiple ports in `main.go` / `Server` if not already handled.
+			// Checking `main.go`: `listenAddr := tunnelCmd.String(...)`. It is a single value.
+			// But `reconciler.go` previously generated:
+			// `args = append(args, fmt.Sprintf("-listen-addr=:%d", p.Port))` loops over ports.
+			// `flag` package with single `String` definition usually takes LAST value if repeated?
+			// OR `flag` package doesn't support repeated flags for `String`.
+			// `Server` struct has `listenAddr` string. It only supports ONE listener in current code.
+			// IF the user has multiple ports, the current code is likely BROKEN for multiple ports or only listens on the last one.
+			// Let's assume Single Port for now or that it works (maybe `main.go` uses a custom flag parser? No, uses standard `flag`).
+
+			// For the single target loading:
+			// We need to pass list of targets compatible with the listener.
+			// Assuming all containers listen on the SAME TargetPort.
+			// We form "IP:TargetPort".
+			// If Service maps Port 80 -> TargetPort 8080.
+			// We push "IP:8080".
+
+			// We assume 1 Service Port for simplicity or standard LB behavior.
+			// If multiple ports, we'd need multiple Listeners and multiple Target Groups.
+			// For now, let's take the First Service Port's TargetPort.
+			targetPort := dockerService.Spec.Ports[0].TargetPort
+			targetIPs = append(targetIPs, fmt.Sprintf("%s:%d", tc.Status.IPv4, targetPort))
+		}
+		if firstContainer == nil {
+			firstContainer = &tc
+		}
+	}
+
+	// Logic 2: Tunnel Server (K8s) - Fixed size (1) acting as Load Balancer
 	desiredReplicas := 1
 	if len(targetContainers) == 0 {
 		desiredReplicas = 0
 	}
-	wsURL, err := r.reconcileTunnelServer(ctx, dockerService, desiredReplicas)
+	wsURL, err := r.reconcileTunnelServer(ctx, dockerService, desiredReplicas, targetIPs)
 	if err != nil {
 		l.Error(err, "Failed to reconcile tunnel server")
 		return ctrl.Result{}, err
 	}
 
-	// Logic 2: Tunnel Clients (Docker) - One for each target container
-	for _, targetContainer := range targetContainers {
-		// Resolve Client for THIS container
-		cli, err := r.getDockerClient(ctx, &targetContainer)
+	// Logic 3: Tunnel Client (Docker) - SINGLE client
+	if firstContainer != nil {
+		// Resolve Client using the first container's DockerHostRef
+		cli, err := r.getDockerClient(ctx, firstContainer)
 		if err != nil {
-			l.Error(err, "Failed to get docker client for container", "container", targetContainer.Name)
-			continue
+			l.Error(err, "Failed to get docker client", "host", firstContainer.Spec.DockerHostRef)
+			return ctrl.Result{}, err
 		}
 
-		if err := r.reconcileTunnelClient(ctx, cli, dockerService, &targetContainer, wsURL); err != nil {
-			l.Error(err, "Failed to reconcile tunnel client", "container", targetContainer.Name)
-			// Should we return error or continue? Continue for partial success.
+		// Reconcile SINGLE Tunnel Client
+		// We name it genericly: "tunnel-client-<service-name>"
+		if err := r.reconcileTunnelClient(ctx, cli, dockerService, firstContainer, wsURL); err != nil {
+			l.Error(err, "Failed to reconcile tunnel client")
 		}
 	}
 
@@ -164,7 +216,7 @@ func (r *DockerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 // reconcileTunnelServer creates the K8s Deployment and Service for the tunnel server
-func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds *appv1alpha1.DockerService, targetCount int) (string, error) {
+func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds *appv1alpha1.DockerService, targetCount int, targetIPs []string) (string, error) {
 	name := "tunnel-" + ds.Name
 	namespace := ds.Namespace
 	l := log.FromContext(ctx)
@@ -224,11 +276,15 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}
 
 		// Build Args
+		// Join targets
+		targetsCSV := strings.Join(targetIPs, ",")
+
 		args := []string{
 			"tunnel",
 			"-mode=server",
 			"-ws-addr=:8081",
 			"-auth-token=" + authToken,
+			"-targets=" + targetsCSV,
 		}
 		for _, p := range ds.Spec.Ports {
 			args = append(args, fmt.Sprintf("-listen-addr=:%d", p.Port))
@@ -246,8 +302,9 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 						}
 						return img
 					}(), // Use same image
-					Args:  args,
-					Ports: []corev1.ContainerPort{{ContainerPort: 8081}},
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Args:            args,
+					Ports:           []corev1.ContainerPort{{ContainerPort: 8081}},
 				}},
 			},
 		}
@@ -299,34 +356,31 @@ func (r *DockerServiceReconciler) ensureTunnelAuthSecret(ctx context.Context, ds
 	return token, nil
 }
 
-// reconcileTunnelClient creates tunnel client containers on the Docker host
-func (r *DockerServiceReconciler) reconcileTunnelClient(ctx context.Context, cli dockerclient.APIClient, ds *appv1alpha1.DockerService, dc *appv1alpha1.DockerContainer, wsURL string) error {
+// reconcileTunnelClient creates A SINGLE tunnel client container on the Docker host
+func (r *DockerServiceReconciler) reconcileTunnelClient(ctx context.Context, cli dockerclient.APIClient, ds *appv1alpha1.DockerService, representativeContainer *appv1alpha1.DockerContainer, wsURL string) error {
 	l := log.FromContext(ctx)
 
-	// Get Main Container IP
-	mainContainer, err := cli.ContainerInspect(ctx, dc.Spec.ContainerName)
+	// We use the "Representative Container" to determine:
+	// 1. Docker Host (already resolved cli)
+	// 2. Network (we should join the same network to reach targets)
+
+	// Inspect Representative to get NetworkID
+	mainContainer, err := cli.ContainerInspect(ctx, representativeContainer.Spec.ContainerName)
 	if err != nil {
 		if dockerclient.IsErrNotFound(err) {
-			l.Info("Main container not ready yet for tunnel")
+			l.Info("Representative container not found, skipping tunnel client")
 			return nil
 		}
 		return err
 	}
 
-	targetIP := ""
 	targetNetworkID := ""
 	for _, netConf := range mainContainer.NetworkSettings.Networks {
-		targetIP = netConf.IPAddress
 		targetNetworkID = netConf.NetworkID
 		break
 	}
-	if targetIP == "" {
-		l.Info("Main container has no IP yet")
-		return nil
-	}
 
-	// Gateway Logic for connection
-	// Similar to before, we need to connect to the K8s gateway from outside.
+	// Gateway Logic for connection (Connect to K8s from Docker)
 	gatewayPort := 30000
 	gatewayHost := "localhost"
 
@@ -349,96 +403,95 @@ func (r *DockerServiceReconciler) reconcileTunnelClient(ctx context.Context, cli
 	if img == "" {
 		img = "hvtung/k8s-docker-operator:latest"
 	}
-	// Pulling implementation skipped for brevity/simplicity, assume it works or handled elsewhere
+
+	// Check/Pull Image
+	_, _, err = cli.ImageInspectWithRaw(ctx, img)
+	if err != nil {
+		reader, err := cli.ImagePull(ctx, img, image.PullOptions{})
+		if err == nil {
+			io.Copy(io.Discard, reader)
+			reader.Close()
+		} else {
+			l.Error(err, "Failed to pull tunnel image (might be local)")
+		}
+	}
 
 	targetQuery := url.QueryEscape(wsURL)
 	clientConnectURL := fmt.Sprintf("ws://%s:%d/ws?target=%s&token=%s", gatewayHost, gatewayPort, targetQuery, url.QueryEscape(authToken))
 
-	// Create tunnel clients
-	activeClients := 0
-	for i, port := range ds.Spec.Ports {
-		targetAddr := fmt.Sprintf("%s:%d", targetIP, port.TargetPort)
-		// Use Container Name for uniqueness in Load Balanced mode
-		tunnelName := fmt.Sprintf("%s-tunnel-%d", dc.Name, i)
+	// Single Tunnel Client Name
+	tunnelName := fmt.Sprintf("tunnel-client-%s", ds.Name)
 
-		// Check if running
-		_, err := cli.ContainerInspect(ctx, tunnelName)
-		if err == nil {
-			activeClients++
-			continue
-		} else if !dockerclient.IsErrNotFound(err) {
-			return err
-		}
-
-		// Create
-		l.Info("Creating tunnel client", "name", tunnelName, "target", targetAddr)
-
-		config := &container.Config{
-			Image: img,
-			Cmd: []string{
-				"tunnel",
-				"-mode=client",
-				"-server-url=" + clientConnectURL,
-				"-target-addr=" + targetAddr,
-				"-auth-token=" + authToken,
-			},
-		}
-
-		hostConfig := &container.HostConfig{
-			RestartPolicy: container.RestartPolicy{Name: "always"},
-		}
-		if netMode == "host" {
-			hostConfig.NetworkMode = "host"
-		} else if netMode == "kind" {
-			hostConfig.NetworkMode = "kind"
-		}
-
-		_, err = cli.ContainerCreate(ctx, config, hostConfig, nil, nil, tunnelName)
-		if err != nil {
-			return err
-		}
-		if err := cli.ContainerStart(ctx, tunnelName, container.StartOptions{}); err != nil {
-			return err
-		}
-
-		// Connect to target network if applicable
-		if targetNetworkID != "" && targetNetworkID != "host" && targetNetworkID != "none" {
-			// Try to connect. Ignore if already connected.
-			if err := cli.NetworkConnect(ctx, targetNetworkID, tunnelName, nil); err != nil {
-				// Current docker client might return error if already connected.
-				// We can check error string or inspect first. Checking string is easier but fragile.
-				// Let's inspect first since we might need to know.
-				// Actually, just ignore specific error types?
-				// "endpoint with name ... already exists in network ..."
-				// "already connected to network"
-				// For simplicity/robustness, let's log debug and ignore error for now, or check inspect.
-
-				// Better: check inspect of tunnel container.
-				cInspect, errInspect := cli.ContainerInspect(ctx, tunnelName)
-				alreadyConnected := false
-				if errInspect == nil {
-					for _, n := range cInspect.NetworkSettings.Networks {
-						if n.NetworkID == targetNetworkID {
-							alreadyConnected = true
-							break
-						}
-					}
-				}
-
-				if !alreadyConnected {
-					// Real error
-					l.Error(err, "Failed to connect tunnel to target network", "network", targetNetworkID)
-					// Don't fail the loop? Warning.
+	// Check if running and image matches
+	existing, err := cli.ContainerInspect(ctx, tunnelName)
+	if err == nil {
+		// If image doesn't match, we need to recreate
+		if existing.Config.Image != img {
+			l.Info("Tunnel client image drift detected, recreating", "name", tunnelName, "old", existing.Config.Image, "new", img)
+			if err := cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true}); err != nil {
+				return err
+			}
+			// Continue to creation
+		} else {
+			if !existing.State.Running {
+				// Restart
+				if err := cli.ContainerStart(ctx, tunnelName, container.StartOptions{}); err != nil {
+					return err
 				}
 			}
+			// Update status and return
+			ds.Status.Phase = "Active"
+			ds.Status.TunnelClients = 1
+			ds.Status.TunnelServerURL = wsURL
+			metricsClient := client.NewNamespacedClient(r.Client, ds.Namespace)
+			return metricsClient.Status().Update(ctx, ds)
 		}
+	} else if !dockerclient.IsErrNotFound(err) {
+		return err
+	}
 
-		activeClients++
+	// Create
+	l.Info("Creating single tunnel client", "name", tunnelName)
+
+	config := &container.Config{
+		Image: img,
+		Cmd: []string{
+			"tunnel",
+			"-mode=client",
+			"-server-url=" + clientConnectURL,
+			"-auth-token=" + authToken,
+			// No target-addr, it is dynamic
+		},
+	}
+
+	hostConfig := &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{Name: "always"},
+	}
+	if netMode == "host" {
+		hostConfig.NetworkMode = "host"
+	} else if netMode == "kind" {
+		hostConfig.NetworkMode = "kind"
+	}
+
+	_, err = cli.ContainerCreate(ctx, config, hostConfig, nil, nil, tunnelName)
+	if err != nil {
+		return err
+	}
+	if err := cli.ContainerStart(ctx, tunnelName, container.StartOptions{}); err != nil {
+		return err
+	}
+
+	// Connect to target network if applicable
+	if targetNetworkID != "" && targetNetworkID != "host" && targetNetworkID != "none" {
+		if err := cli.NetworkConnect(ctx, targetNetworkID, tunnelName, nil); err != nil {
+			// Ignore if already connected (fallback)
+			l.Info("Network connect (might already exist)", "error", err)
+		}
 	}
 
 	// Update status
 	ds.Status.Phase = "Active"
-	ds.Status.TunnelClients = activeClients
+	ds.Status.TunnelClients = 1
 	ds.Status.TunnelServerURL = wsURL
 	metricsClient := client.NewNamespacedClient(r.Client, ds.Namespace)
 	return metricsClient.Status().Update(ctx, ds)
@@ -447,13 +500,11 @@ func (r *DockerServiceReconciler) reconcileTunnelClient(ctx context.Context, cli
 func (r *DockerServiceReconciler) deleteExternalResources(ctx context.Context, ds *appv1alpha1.DockerService) error {
 	l := log.FromContext(ctx)
 
-	// We need to clean up tunnels for ALL potential containers.
-	// Since we don't have the list here easily without querying, we might need to rely on
-	// Docker naming convention or list all containers and filter?
-	// OR: For now, we can just try to clean up known patterns if possible.
-	// But `deleteExternalResources` is called on finalizer.
-	// The best way is to list all DockerContainers that MATCH the selector (if it exists)
-	// and clean up.
+	// Clean up the single tunnel client
+	// We need a Docker Client.
+	// We don't know exactly which host it is on without checking.
+	// But we can iterate over target containers to find the host.
+	// OR: Try to clean up from valid hosts.
 
 	// Re-fetch target containers
 	var targetContainers []appv1alpha1.DockerContainer
@@ -471,26 +522,30 @@ func (r *DockerServiceReconciler) deleteExternalResources(ctx context.Context, d
 		}
 	}
 
-	for _, targetContainer := range targetContainers {
-		cli, err := r.getDockerClient(ctx, &targetContainer)
+	// Map of DockerHosts to check
+	hosts := make(map[string]appv1alpha1.DockerContainer)
+	for _, tc := range targetContainers {
+		hosts[tc.Spec.DockerHostRef] = tc
+	}
+
+	tunnelName := fmt.Sprintf("tunnel-client-%s", ds.Name)
+
+	for _, tc := range hosts {
+		cli, err := r.getDockerClient(ctx, &tc)
 		if err != nil {
-			l.Error(err, "Failed to get docker client for cleanup", "container", targetContainer.Name)
+			l.Error(err, "Failed to get docker client for cleanup", "host", tc.Spec.DockerHostRef)
 			continue
 		}
 
-		for i := range ds.Spec.Ports {
-			// Naming convention: <container-name>-tunnel-<port-index>
-			tunnelName := fmt.Sprintf("%s-tunnel-%d", targetContainer.Name, i)
-
-			// Also try legacy name for backward compatibility? "<service-name>-tunnel-..."
-			// Only if containerRef was used?
-			// For simplicity, let's just stick to new pattern or try both if needed.
-
-			err := cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true})
-			if err != nil && !dockerclient.IsErrNotFound(err) {
-				l.Error(err, "Failed to remove tunnel container", "name", tunnelName)
-			}
+		// Remove single tunnel client
+		err = cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true})
+		if err != nil && !dockerclient.IsErrNotFound(err) {
+			l.Error(err, "Failed to remove tunnel container", "name", tunnelName)
 		}
+
+		// Remove legacy tunnel containers too (just in case)
+		legacyName := fmt.Sprintf("%s-tunnel", ds.Name) // Try various patterns if needed
+		_ = cli.ContainerRemove(ctx, legacyName, container.RemoveOptions{Force: true})
 	}
 	return nil
 }

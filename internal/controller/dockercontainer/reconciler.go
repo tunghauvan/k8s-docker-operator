@@ -121,8 +121,7 @@ func (r *DockerContainerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// 5. Tunnel Logic --> Moved to DockerService controller
-	// wsURL, err := r.reconcileTunnelServer(ctx, dockerContainer) ...
-	// err = r.reconcileTunnelClient(ctx, cli, dockerContainer, wsURL) ...
+	// Legacy tunnel code removed.
 
 	return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 }
@@ -174,6 +173,22 @@ func (r *DockerContainerReconciler) syncContainer(ctx context.Context, cli docke
 		}
 		if cr.Status.Health != health {
 			cr.Status.Health = health
+			statusChanged = true
+		}
+	}
+
+	// IPv4 Address
+	if inspectErr == nil && inspectResp.NetworkSettings != nil {
+		ip := ""
+		// Iterate networks, pick first available IP
+		for _, netSettings := range inspectResp.NetworkSettings.Networks {
+			if netSettings.IPAddress != "" {
+				ip = netSettings.IPAddress
+				break
+			}
+		}
+		if cr.Status.IPv4 != ip {
+			cr.Status.IPv4 = ip
 			statusChanged = true
 		}
 	}

@@ -14,14 +14,12 @@ import (
 // Client is the tunnel client running on Docker Host
 type Client struct {
 	serverAddr string // WebSocket URL (e.g. ws://tunnel-server/ws)
-	targetAddr string // Target Container Address (e.g. localhost:6379)
 	token      string // Authentication Token
 }
 
-func NewClient(serverAddr, targetAddr, token string) *Client {
+func NewClient(serverAddr, token string) *Client {
 	return &Client{
 		serverAddr: serverAddr,
-		targetAddr: targetAddr,
 		token:      token,
 	}
 }
@@ -50,8 +48,13 @@ func (c *Client) connectAndServe() error {
 
 	conn := NewWebSocketConn(ws)
 
+	// Custom Yamux config for KeepAlive
+	yamuxConfig := yamux.DefaultConfig()
+	yamuxConfig.EnableKeepAlive = true
+	yamuxConfig.KeepAliveInterval = 10 * time.Second
+
 	// We use yamux.Client here. The Server uses yamux.Server.
-	session, err := yamux.Client(conn, nil)
+	session, err := yamux.Client(conn, yamuxConfig)
 	if err != nil {
 		return err
 	}
@@ -74,10 +77,33 @@ func (c *Client) connectAndServe() error {
 func (c *Client) handleStream(stream net.Conn) {
 	defer stream.Close()
 
+	// Read Target Address from Stream Header (First line ending with \n)
+	// We need to buffer the read to avoid consuming too much
+	// Implementation simplified: read byte by byte until \n
+	targetAddr := ""
+	buf := make([]byte, 1)
+	for {
+		_, err := stream.Read(buf)
+		if err != nil {
+			log.Printf("Failed to read header: %v", err)
+			return
+		}
+		if buf[0] == '\n' {
+			break
+		}
+		targetAddr += string(buf[0])
+		if len(targetAddr) > 256 {
+			log.Printf("Header too long")
+			return
+		}
+	}
+
+	log.Printf("Tunnel request for target: %s", targetAddr)
+
 	// Dial Target
-	target, err := net.Dial("tcp", c.targetAddr)
+	target, err := net.Dial("tcp", targetAddr)
 	if err != nil {
-		log.Printf("Failed to dial target %s: %v", c.targetAddr, err)
+		log.Printf("Failed to dial target %s: %v", targetAddr, err)
 		return
 	}
 	defer target.Close()

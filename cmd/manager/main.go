@@ -4,6 +4,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -47,11 +48,11 @@ func main() {
 		listenAddr := tunnelCmd.String("listen-addr", ":8080", "Server: TCP Listen Address")
 		wsAddr := tunnelCmd.String("ws-addr", ":8081", "Server: WebSocket Listen Address")
 		authToken := tunnelCmd.String("auth-token", "", "Server: Authentication token for tunnel clients")
+		targets := tunnelCmd.String("targets", "", "Server: Comma-separated list of target addresses (e.g. 10.0.1.2:80,10.0.1.3:80)")
 
 		// Client Args
-		// Client Args
 		serverURL := tunnelCmd.String("server-url", "ws://localhost:8081/ws", "Client: Tunnel Server URL")
-		targetAddr := tunnelCmd.String("target-addr", "localhost:6379", "Client: Target Address")
+		// targetAddr removed from client args as it's dynamic now
 		// Reuse authToken for client as well, or define a new one "client-token"
 		// To match reconciler's intent, let's allow auth-token to be used by client too.
 		// Since authToken is already defined above for server, we can reuse it if we parse flags.
@@ -66,14 +67,23 @@ func main() {
 		setupLog.Info("Starting Tunnel", "mode", *mode)
 
 		if *mode == "server" {
-			srv := tunnel.NewServer(*listenAddr, *wsAddr, *authToken)
+			var targetList []string
+			if *targets != "" {
+				rawList := strings.Split(*targets, ",")
+				for _, t := range rawList {
+					if tVal := strings.TrimSpace(t); tVal != "" {
+						targetList = append(targetList, tVal)
+					}
+				}
+			}
+			srv := tunnel.NewServer(*listenAddr, *wsAddr, *authToken, targetList)
 			if err := srv.Start(); err != nil {
 				setupLog.Error(err, "Tunnel Server failed")
 				os.Exit(1)
 			}
 		} else if *mode == "client" {
 			// Client needs token
-			cli := tunnel.NewClient(*serverURL, *targetAddr, *authToken)
+			cli := tunnel.NewClient(*serverURL, *authToken)
 			if err := cli.Start(); err != nil {
 				setupLog.Error(err, "Tunnel Client failed")
 				os.Exit(1)

@@ -220,6 +220,9 @@ spec:
               id:
                 description: ID of the container
                 type: string
+              ipv4:
+                description: IPv4 address of the container
+                type: string
               state:
                 description: State request state of the container
                 type: string

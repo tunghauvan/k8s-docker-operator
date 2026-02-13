@@ -175,6 +175,9 @@ type DockerContainerStatus struct {
 
 	// Health is the Docker health status (healthy, unhealthy, starting, none)
 	Health string `json:"health,omitempty"`
+
+	// IPv4 address of the container
+	IPv4 string `json:"ipv4,omitempty"`
 }
 
 //+kubebuilder:object:root=true
