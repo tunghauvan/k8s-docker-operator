@@ -37,14 +37,20 @@ Instead of joining nodes to the cluster (heavy, secure VPNs needed), we use a **
 
 ## 📦 Installation
 
+For detailed setup instructions, including our **Automated Quickstart Script**, please see the [Quickstart Guide](docs/quickstart.md).
 
-To install the operator and its dependencies (RBAC, CRDs, and Tunnel Gateway), use the provided install manifest:
-
+Quick summary:
 ```bash
+# Automated Setup (Recommended)
+./scripts/kind-quickstart.sh
+
+# Manual Setup
 kubectl apply -f install/install.yaml
 ```
 
 ## 🛠 Usage
+
+You can find a variety of example configurations in the [examples/](examples/) directory.
 
 ### 1. Define a Docker Host (Remote)
 
