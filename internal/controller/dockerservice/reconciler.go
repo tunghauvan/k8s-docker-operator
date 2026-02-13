@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -275,8 +276,8 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 		dep.Spec.Replicas = &replicas
 		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}
 
-		// Build Args
-		// Join targets
+		// Join targets (sorted for stability)
+		sort.Strings(targetIPs)
 		targetsCSV := strings.Join(targetIPs, ",")
 
 		args := []string{

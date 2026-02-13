@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 )
 
 // RunGateway starts a simple reverse proxy gateway.
@@ -61,6 +62,7 @@ func RunGateway(listenAddr string) error {
 			// Important: Set Host header so the backend knows who it is
 			req.Host = targetURL.Host
 		},
+		FlushInterval: 100 * time.Millisecond,
 	}
 
 	http.Handle("/", proxy)

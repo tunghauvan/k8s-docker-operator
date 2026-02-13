@@ -15,9 +15,31 @@ type WebSocketConn struct {
 }
 
 func NewWebSocketConn(ws *websocket.Conn) *WebSocketConn {
-	return &WebSocketConn{
+	c := &WebSocketConn{
 		ws: ws,
 	}
+
+	// Set up PING/PONG to keep connection alive at WebSocket level
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	// Start a pinger goroutine
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	return c
 }
 
 func (c *WebSocketConn) Read(b []byte) (n int, err error) {
