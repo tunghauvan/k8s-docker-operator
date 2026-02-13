@@ -54,6 +54,7 @@ type cachedClient struct {
 //+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
@@ -263,8 +264,29 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 		return "", err
 	}
 
-	// 3. Deployment
-	replicas := int32(targetCount)
+	// 3. Targets ConfigMap (for dynamic updates without restart)
+	cmName := name + "-targets"
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: namespace,
+		},
+	}
+	sort.Strings(targetIPs)
+	targetsCSV := strings.Join(targetIPs, ",")
+
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		cm.Data = map[string]string{
+			"targets": targetsCSV,
+		}
+		return ctrl.SetControllerReference(ds, cm, r.Scheme)
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// 4. Deployment
+	replicas := int32(1) // Single tunnel server pod for stable connections
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -276,16 +298,12 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 		dep.Spec.Replicas = &replicas
 		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}
 
-		// Join targets (sorted for stability)
-		sort.Strings(targetIPs)
-		targetsCSV := strings.Join(targetIPs, ",")
-
 		args := []string{
 			"tunnel",
 			"-mode=server",
 			"-ws-addr=:8081",
 			"-auth-token=" + authToken,
-			"-targets=" + targetsCSV,
+			"-targets-file=/etc/tunnel/targets",
 		}
 		for _, p := range ds.Spec.Ports {
 			args = append(args, fmt.Sprintf("-listen-addr=:%d", p.Port))
@@ -306,6 +324,22 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Args:            args,
 					Ports:           []corev1.ContainerPort{{ContainerPort: 8081}},
+					VolumeMounts: []corev1.VolumeMount{{
+						Name:      "targets",
+						MountPath: "/etc/tunnel",
+					}},
+				}},
+				Volumes: []corev1.Volume{{
+					Name: "targets",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+							Items: []corev1.KeyToPath{{
+								Key:  "targets",
+								Path: "targets",
+							}},
+						},
+					},
 				}},
 			},
 		}

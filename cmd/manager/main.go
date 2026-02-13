@@ -49,6 +49,7 @@ func main() {
 		wsAddr := tunnelCmd.String("ws-addr", ":8081", "Server: WebSocket Listen Address")
 		authToken := tunnelCmd.String("auth-token", "", "Server: Authentication token for tunnel clients")
 		targets := tunnelCmd.String("targets", "", "Server: Comma-separated list of target addresses (e.g. 10.0.1.2:80,10.0.1.3:80)")
+		targetsFile := tunnelCmd.String("targets-file", "", "Server: Path to a file containing comma-separated targets (watched for changes)")
 
 		// Client Args
 		serverURL := tunnelCmd.String("server-url", "ws://localhost:8081/ws", "Client: Tunnel Server URL")
@@ -77,6 +78,9 @@ func main() {
 				}
 			}
 			srv := tunnel.NewServer(*listenAddr, *wsAddr, *authToken, targetList)
+			if *targetsFile != "" {
+				srv.SetTargetsFile(*targetsFile)
+			}
 			if err := srv.Start(); err != nil {
 				setupLog.Error(err, "Tunnel Server failed")
 				os.Exit(1)

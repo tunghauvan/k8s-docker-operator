@@ -5,6 +5,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,13 +16,14 @@ import (
 
 // Server is the tunnel server running in K8s
 type Server struct {
-	listenAddr string // TCP Address for K8s Service (e.g. :8080)
-	wsAddr     string // WebSocket Address for Client (e.g. :8081)
-	authToken  string // Shared secret for authenticating tunnel clients
-	sessions   []*yamux.Session
-	targets    []string
-	rrIndex    uint64
-	mu         sync.Mutex
+	listenAddr  string // TCP Address for K8s Service (e.g. :8080)
+	wsAddr      string // WebSocket Address for Client (e.g. :8081)
+	authToken   string // Shared secret for authenticating tunnel clients
+	sessions    []*yamux.Session
+	targets     []string
+	targetsFile string
+	rrIndex     uint64
+	mu          sync.Mutex
 }
 
 func NewServer(listenAddr, wsAddr, authToken string, targets []string) *Server {
@@ -33,6 +36,12 @@ func NewServer(listenAddr, wsAddr, authToken string, targets []string) *Server {
 	}
 }
 
+func (s *Server) SetTargetsFile(path string) {
+	s.mu.Lock()
+	s.targetsFile = path
+	s.mu.Unlock()
+}
+
 func (s *Server) Start() error {
 	// Start TCP Listener (Service Port)
 	ln, err := net.Listen("tcp", s.listenAddr)
@@ -41,6 +50,11 @@ func (s *Server) Start() error {
 	}
 	log.Printf("Listening for TCP traffic on %s", s.listenAddr)
 	go s.acceptTCP(ln)
+
+	// Start Dynamic Targets Watcher if configured
+	if s.targetsFile != "" {
+		go s.watchTargetsFile()
+	}
 
 	// Start WebSocket Server (Tunnel Protocol)
 	http.HandleFunc("/ws", s.handleWS)
@@ -223,4 +237,57 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	for !session.IsClosed() {
 		time.Sleep(1 * time.Second)
 	}
+}
+
+func (s *Server) watchTargetsFile() {
+	log.Printf("Watching targets file: %s", s.targetsFile)
+	// Initial load
+	s.loadTargetsFromFile()
+
+	// Simple polling watcher to avoid cgo/fsnotify complexities in a small binary
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.loadTargetsFromFile()
+	}
+}
+
+func (s *Server) loadTargetsFromFile() {
+	data, err := os.ReadFile(s.targetsFile)
+	if err != nil {
+		log.Printf("Error reading targets file %s: %v", s.targetsFile, err)
+		return
+	}
+
+	content := strings.TrimSpace(string(data))
+	var newTargets []string
+	if content != "" {
+		rawList := strings.Split(content, ",")
+		for _, t := range rawList {
+			if tVal := strings.TrimSpace(t); tVal != "" {
+				newTargets = append(newTargets, tVal)
+			}
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Compare to avoid logging if no change
+	if len(newTargets) == len(s.targets) {
+		match := true
+		for i := range newTargets {
+			if newTargets[i] != s.targets[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return
+		}
+	}
+
+	log.Printf("Dynamic targets updated from file: %v", newTargets)
+	s.targets = newTargets
 }
