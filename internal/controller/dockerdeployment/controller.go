@@ -40,7 +40,12 @@ func (r *DockerDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// 2. Compute Desired Replicas
+	// 2. Handling Deletion: skip reconciliation if being deleted
+	if !deployment.ObjectMeta.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
+	// 3. Compute Desired Replicas
 	replicas := int32(1)
 	if deployment.Spec.Replicas != nil {
 		replicas = *deployment.Spec.Replicas

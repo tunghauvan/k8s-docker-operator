@@ -560,11 +560,24 @@ func (r *DockerContainerReconciler) deleteExternalResources(ctx context.Context,
 	}
 	l.Info("Container removed", "Name", cr.Spec.ContainerName)
 
-	// Remove indexed tunnel client containers
-	for i := range cr.Spec.Services {
-		tunnelName := fmt.Sprintf("%s-tunnel-%d", cr.Spec.ContainerName, i)
-		if err := cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true}); err != nil && !dockerclient.IsErrNotFound(err) {
-			l.Error(err, "Failed to remove tunnel container", "Name", tunnelName)
+	// Remove tunnel client containers (both from Spec.Services and those created by DockerService)
+	// We try up to 10 ports to be safe, as DockerService might have targeted this container.
+	maxPorts := 10
+	if len(cr.Spec.Services) > maxPorts {
+		maxPorts = len(cr.Spec.Services)
+	}
+	for i := 0; i < maxPorts; i++ {
+		// Try both naming conventions:
+		// 1. Based on Docker container name (used when services are in DockerContainer spec)
+		// 2. Based on Kubernetes resource name (used by DockerService controller)
+		tunnelNames := []string{
+			fmt.Sprintf("%s-tunnel-%d", cr.Spec.ContainerName, i),
+			fmt.Sprintf("%s-tunnel-%d", cr.Name, i),
+		}
+		for _, tn := range tunnelNames {
+			if err := cli.ContainerRemove(ctx, tn, container.RemoveOptions{Force: true}); err != nil && !dockerclient.IsErrNotFound(err) {
+				l.Error(err, "Failed to remove tunnel container", "Name", tn)
+			}
 		}
 	}
 

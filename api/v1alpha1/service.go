@@ -23,8 +23,14 @@ import (
 // DockerServiceSpec defines the desired state of DockerService
 type DockerServiceSpec struct {
 	// ContainerRef references the DockerContainer to expose.
-	// This must be in the same namespace.
-	ContainerRef string `json:"containerRef"`
+	// Mutually exclusive with Selector.
+	// +optional
+	ContainerRef string `json:"containerRef,omitempty"`
+
+	// Selector matches multiple DockerContainers to expose (Load Balancing).
+	// Mutually exclusive with ContainerRef.
+	// +optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 
 	// Ports list of port mappings from container to K8s Service
 	Ports []ServicePort `json:"ports"`

@@ -17,7 +17,8 @@ type Server struct {
 	listenAddr string // TCP Address for K8s Service (e.g. :8080)
 	wsAddr     string // WebSocket Address for Client (e.g. :8081)
 	authToken  string // Shared secret for authenticating tunnel clients
-	session    *yamux.Session
+	sessions   []*yamux.Session
+	rrIndex    uint64
 	mu         sync.Mutex
 }
 
@@ -26,6 +27,7 @@ func NewServer(listenAddr, wsAddr, authToken string) *Server {
 		listenAddr: listenAddr,
 		wsAddr:     wsAddr,
 		authToken:  authToken,
+		sessions:   make([]*yamux.Session, 0),
 	}
 }
 
@@ -62,23 +64,32 @@ func (s *Server) acceptTCP(ln net.Listener) {
 
 func (s *Server) handleTCP(conn net.Conn) {
 	defer conn.Close()
-	s.mu.Lock()
-	sess := s.session
-	s.mu.Unlock()
+	log.Printf("handleTCP: Accepted connection from %s", conn.RemoteAddr())
 
-	if sess == nil {
-		log.Println("No tunnel client connected, dropping connection")
+	s.mu.Lock()
+	if len(s.sessions) == 0 {
+		s.mu.Unlock()
+		log.Println("handleTCP: No tunnel client connected, dropping connection")
 		return
 	}
+
+	// Round Robin Selection
+	idx := s.rrIndex % uint64(len(s.sessions))
+	sess := s.sessions[idx]
+	s.rrIndex++
+	s.mu.Unlock()
+
+	log.Printf("handleTCP: Selected session %d", idx)
 
 	// Open a stream to the client
 	// This tells the client "I have a connection, carry it for me"
 	stream, err := sess.Open()
 	if err != nil {
-		log.Printf("Failed to open stream: %v", err)
+		log.Printf("handleTCP: Failed to open stream: %v", err)
 		return
 	}
 	defer stream.Close()
+	log.Printf("handleTCP: Stream opened successfully")
 
 	// Pipe bidirectional
 	errChan := make(chan error, 2)
@@ -91,7 +102,8 @@ func (s *Server) handleTCP(conn net.Conn) {
 		errChan <- err
 	}()
 
-	<-errChan // Wait for one side to close
+	err = <-errChan
+	log.Printf("handleTCP: Connection closed: %v", err)
 }
 
 var upgrader = websocket.Upgrader{
@@ -129,15 +141,42 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	if s.session != nil {
-		s.session.Close()
-	}
-	s.session = session
+	s.sessions = append(s.sessions, session)
+	currentCount := len(s.sessions)
 	s.mu.Unlock()
 
+	log.Printf("Registered new session. Total active sessions: %d", currentCount)
+
+	// Clean up on disconnect
+	defer func() {
+		s.mu.Lock()
+		for i, sess := range s.sessions {
+			if sess == session {
+				// efficient removal
+				s.sessions = append(s.sessions[:i], s.sessions[i+1:]...)
+				break
+			}
+		}
+		remaining := len(s.sessions)
+		s.mu.Unlock()
+		session.Close()
+		log.Printf("Tunnel Client disconnected. Remaining sessions: %d", remaining)
+	}()
+
 	// Block until session is closed (client disconnects or error)
+	// Yamux session doesn't have a blocking "Wait" method exposed directly that detects closure easily
+	// without opening streams, but we can rely on the underlying connection ping/pong or keepalive.
+	// Actually, typically we just wait. If current implementation used a loop sleeping, we can keep that
+	// or use session.CloseChan() if available in newer yamux?
+	// Old code:
+	// for !session.IsClosed() { time.Sleep(time.Second) }
+
+	// Better: Use a keepalive mechanism or just read from the underlying conn if exposed?
+	// Since we wrapped it in NewWebSocketConn, the yamux server loop runs in background.
+	// We need to block this handler so the WS connection stays open.
+
+	// Let's stick to the loop for now as it matches previous logic, just ensure it works.
 	for !session.IsClosed() {
-		time.Sleep(time.Second)
+		time.Sleep(1 * time.Second)
 	}
-	log.Printf("Tunnel Client session closed from %s", ws.RemoteAddr())
 }

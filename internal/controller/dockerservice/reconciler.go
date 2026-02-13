@@ -68,24 +68,50 @@ func (r *DockerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
-	// Fetch referenced DockerContainer
-	dockerContainer := &appv1alpha1.DockerContainer{}
-	err = r.Get(ctx, k8sclient.ObjectKey{Namespace: req.Namespace, Name: dockerService.Spec.ContainerRef}, dockerContainer)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			l.Info("Referenced DockerContainer not found", "containerRef", dockerService.Spec.ContainerRef)
-			// Wait for container to be created
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// Fetch referenced DockerContainer(s)
+	var targetContainers []appv1alpha1.DockerContainer
+
+	if dockerService.Spec.Selector != nil {
+		// List by Selector
+		var containerList appv1alpha1.DockerContainerList
+		selector, err := metav1.LabelSelectorAsSelector(dockerService.Spec.Selector)
+		if err != nil {
+			l.Error(err, "Invalid selector")
+			return ctrl.Result{}, err // Don't retry invalid selector
 		}
-		return ctrl.Result{}, err
+
+		if err := r.List(ctx, &containerList, client.InNamespace(req.Namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+			l.Error(err, "Failed to list containers by selector")
+			return ctrl.Result{}, err
+		}
+		targetContainers = containerList.Items
+	} else if dockerService.Spec.ContainerRef != "" {
+		// Legacy: Single Container Ref
+		dockerContainer := &appv1alpha1.DockerContainer{}
+		err = r.Get(ctx, k8sclient.ObjectKey{Namespace: req.Namespace, Name: dockerService.Spec.ContainerRef}, dockerContainer)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				l.Info("Referenced DockerContainer not found", "containerRef", dockerService.Spec.ContainerRef)
+				// Wait for container to be created
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		targetContainers = []appv1alpha1.DockerContainer{*dockerContainer}
+	} else {
+		// No target specified
+		l.Info("DockerService has no ContainerRef or Selector")
+		return ctrl.Result{}, nil
 	}
 
-	// Resolve Docker Client (using Container's DockerHostRef)
-	cli, err := r.getDockerClient(ctx, dockerContainer)
-	if err != nil {
-		l.Error(err, "Failed to create docker client")
-		return ctrl.Result{}, err
+	if len(targetContainers) == 0 {
+		l.Info("No matching DockerContainers found, scaling tunnel server to 0")
 	}
+
+	// Resolve Docker Client (using FIRST Container's DockerHostRef for tunnel server setup?)
+	// Actually, we iterate over containers later for tunnel clients.
+	// But we need CLI to clean up old resources if needed.
+	// We'll init CLI inside loop.
 
 	// Finalizer Logic
 	if dockerService.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -97,7 +123,7 @@ func (r *DockerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	} else {
 		if controllerutil.ContainsFinalizer(dockerService, finalizerName) {
-			if err := r.deleteExternalResources(ctx, cli, dockerService); err != nil {
+			if err := r.deleteExternalResources(ctx, dockerService); err != nil {
 				return ctrl.Result{}, err // Retry on failure
 			}
 			controllerutil.RemoveFinalizer(dockerService, finalizerName)
@@ -108,24 +134,37 @@ func (r *DockerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	// Logic 1: Tunnel Server (K8s)
-	wsURL, err := r.reconcileTunnelServer(ctx, dockerService)
+	// Logic 1: Tunnel Server (K8s) - Fixed size (1) acting as Load Balancer
+	desiredReplicas := 1
+	if len(targetContainers) == 0 {
+		desiredReplicas = 0
+	}
+	wsURL, err := r.reconcileTunnelServer(ctx, dockerService, desiredReplicas)
 	if err != nil {
 		l.Error(err, "Failed to reconcile tunnel server")
 		return ctrl.Result{}, err
 	}
 
-	// Logic 2: Tunnel Client (Docker)
-	if err := r.reconcileTunnelClient(ctx, cli, dockerService, dockerContainer, wsURL); err != nil {
-		l.Error(err, "Failed to reconcile tunnel client")
-		return ctrl.Result{}, err
+	// Logic 2: Tunnel Clients (Docker) - One for each target container
+	for _, targetContainer := range targetContainers {
+		// Resolve Client for THIS container
+		cli, err := r.getDockerClient(ctx, &targetContainer)
+		if err != nil {
+			l.Error(err, "Failed to get docker client for container", "container", targetContainer.Name)
+			continue
+		}
+
+		if err := r.reconcileTunnelClient(ctx, cli, dockerService, &targetContainer, wsURL); err != nil {
+			l.Error(err, "Failed to reconcile tunnel client", "container", targetContainer.Name)
+			// Should we return error or continue? Continue for partial success.
+		}
 	}
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 // reconcileTunnelServer creates the K8s Deployment and Service for the tunnel server
-func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds *appv1alpha1.DockerService) (string, error) {
+func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds *appv1alpha1.DockerService, targetCount int) (string, error) {
 	name := "tunnel-" + ds.Name
 	namespace := ds.Namespace
 	l := log.FromContext(ctx)
@@ -172,7 +211,7 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 	}
 
 	// 3. Deployment
-	replicas := int32(1)
+	replicas := int32(targetCount)
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -199,8 +238,14 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
-					Name:  "server",
-					Image: os.Getenv("OPERATOR_IMAGE"), // Use same image
+					Name: "server",
+					Image: func() string {
+						img := os.Getenv("OPERATOR_IMAGE")
+						if img == "" {
+							return "hvtung/k8s-docker-operator:latest"
+						}
+						return img
+					}(), // Use same image
 					Args:  args,
 					Ports: []corev1.ContainerPort{{ContainerPort: 8081}},
 				}},
@@ -313,7 +358,8 @@ func (r *DockerServiceReconciler) reconcileTunnelClient(ctx context.Context, cli
 	activeClients := 0
 	for i, port := range ds.Spec.Ports {
 		targetAddr := fmt.Sprintf("%s:%d", targetIP, port.TargetPort)
-		tunnelName := fmt.Sprintf("%s-tunnel-%d", ds.Name, i)
+		// Use Container Name for uniqueness in Load Balanced mode
+		tunnelName := fmt.Sprintf("%s-tunnel-%d", dc.Name, i)
 
 		// Check if running
 		_, err := cli.ContainerInspect(ctx, tunnelName)
@@ -398,13 +444,52 @@ func (r *DockerServiceReconciler) reconcileTunnelClient(ctx context.Context, cli
 	return metricsClient.Status().Update(ctx, ds)
 }
 
-func (r *DockerServiceReconciler) deleteExternalResources(ctx context.Context, cli dockerclient.APIClient, ds *appv1alpha1.DockerService) error {
+func (r *DockerServiceReconciler) deleteExternalResources(ctx context.Context, ds *appv1alpha1.DockerService) error {
 	l := log.FromContext(ctx)
-	for i := range ds.Spec.Ports {
-		tunnelName := fmt.Sprintf("%s-tunnel-%d", ds.Name, i)
-		err := cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true})
-		if err != nil && !dockerclient.IsErrNotFound(err) {
-			l.Error(err, "Failed to remove tunnel container", "name", tunnelName)
+
+	// We need to clean up tunnels for ALL potential containers.
+	// Since we don't have the list here easily without querying, we might need to rely on
+	// Docker naming convention or list all containers and filter?
+	// OR: For now, we can just try to clean up known patterns if possible.
+	// But `deleteExternalResources` is called on finalizer.
+	// The best way is to list all DockerContainers that MATCH the selector (if it exists)
+	// and clean up.
+
+	// Re-fetch target containers
+	var targetContainers []appv1alpha1.DockerContainer
+	if ds.Spec.Selector != nil {
+		var containerList appv1alpha1.DockerContainerList
+		selector, err := metav1.LabelSelectorAsSelector(ds.Spec.Selector)
+		if err == nil {
+			_ = r.List(ctx, &containerList, client.InNamespace(ds.Namespace), client.MatchingLabelsSelector{Selector: selector})
+			targetContainers = containerList.Items
+		}
+	} else if ds.Spec.ContainerRef != "" {
+		dockerContainer := &appv1alpha1.DockerContainer{}
+		if err := r.Get(ctx, k8sclient.ObjectKey{Namespace: ds.Namespace, Name: ds.Spec.ContainerRef}, dockerContainer); err == nil {
+			targetContainers = []appv1alpha1.DockerContainer{*dockerContainer}
+		}
+	}
+
+	for _, targetContainer := range targetContainers {
+		cli, err := r.getDockerClient(ctx, &targetContainer)
+		if err != nil {
+			l.Error(err, "Failed to get docker client for cleanup", "container", targetContainer.Name)
+			continue
+		}
+
+		for i := range ds.Spec.Ports {
+			// Naming convention: <container-name>-tunnel-<port-index>
+			tunnelName := fmt.Sprintf("%s-tunnel-%d", targetContainer.Name, i)
+
+			// Also try legacy name for backward compatibility? "<service-name>-tunnel-..."
+			// Only if containerRef was used?
+			// For simplicity, let's just stick to new pattern or try both if needed.
+
+			err := cli.ContainerRemove(ctx, tunnelName, container.RemoveOptions{Force: true})
+			if err != nil && !dockerclient.IsErrNotFound(err) {
+				l.Error(err, "Failed to remove tunnel container", "name", tunnelName)
+			}
 		}
 	}
 	return nil
