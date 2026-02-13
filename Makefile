@@ -64,16 +64,19 @@ dist:
 	@echo "---" >> install/install.yaml
 	@cat config/manager/namespace.yaml >> install/install.yaml
 	@echo "---" >> install/install.yaml
-	@cat config/crd/bases/*.yaml >> install/install.yaml
-	@echo "---" >> install/install.yaml
-	@cat config/rbac/role.yaml >> install/install.yaml
-	@echo "---" >> install/install.yaml
-	@cat config/gateway/deployment.yaml >> install/install.yaml
-	@echo "---" >> install/install.yaml
-	@sed "s|IMG_PLACEHOLDER|${IMG_BASE}:$$(cat VERSION)|g" config/manager/manager.yaml >> install/install.yaml
-	@# Update Gateway Image in install.yaml
-	@sed -i '' "s|hvtung/k8s-docker-operator:v0.0.17|${IMG_BASE}:$$(cat VERSION)|g" install/install.yaml
+	@for f in config/crd/bases/*.yaml; do cat $$f; echo "---"; done >> install/install.yaml
+	@for f in config/rbac/*.yaml; do cat $$f; echo "---"; done >> install/install.yaml
+	@for f in config/gateway/*.yaml; do cat $$f; echo "---"; done >> install/install.yaml
+	@cat config/manager/manager.yaml >> install/install.yaml
+	@# Replace IMG_PLACEHOLDER in the final file
+	@sed -i '' "s|IMG_PLACEHOLDER|${IMG_BASE}:$$(cat VERSION)|g" install/install.yaml
 	@echo "Install manifest generated at install/install.yaml"
+	@echo "Generating install/kind-setup.yaml..."
+	@echo "# Kind Cluster Setup (Docker Proxy + Default Host)" > install/kind-setup.yaml
+	@cat config/docker_proxy.yaml >> install/kind-setup.yaml
+	@echo "---" >> install/kind-setup.yaml
+	@cat examples/dockerhost-default.yaml >> install/kind-setup.yaml
+	@echo "Kind setup manifest generated at install/kind-setup.yaml"
 
 # Release (Build, Push, Dist)
 release:

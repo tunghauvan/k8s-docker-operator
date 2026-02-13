@@ -1,0 +1,7 @@
+resources:
+- ../../
+patches:
+- path: deployment_patch.yaml
+images:
+- name: controller
+  newName: hvtung/k8s-docker-operator:v0.3.0

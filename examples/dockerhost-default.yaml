@@ -1,0 +1,7 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerHost
+metadata:
+  name: default
+  namespace: system
+spec:
+  hostURL: tcp://docker-daemon.system.svc:2375

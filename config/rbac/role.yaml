@@ -55,6 +55,7 @@ rules:
   - dockercontainers/finalizers
   - dockerjobs/finalizers
   - dockerservices/finalizers
+  - dockerhosts/finalizers
   verbs:
   - update
 - apiGroups:
@@ -63,6 +64,7 @@ rules:
   - dockercontainers/status
   - dockerjobs/status
   - dockerservices/status
+  - dockerhosts/status
   verbs:
   - get
   - patch
@@ -72,8 +74,12 @@ rules:
   resources:
   - dockerhosts
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - apps

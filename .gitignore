@@ -4,7 +4,6 @@ bin/
 testbin/
 *.out
 *.test
-manager
 
 # Kubernetes Generated
 *.yaml

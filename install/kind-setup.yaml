@@ -1,0 +1,48 @@
+# Kind Cluster Setup (Docker Proxy + Default Host)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: docker-proxy
+  namespace: system
+spec:
+  serviceName: docker-daemon
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docker-proxy
+  template:
+    metadata:
+      labels:
+        app: docker-proxy
+    spec:
+      containers:
+      - name: socat
+        image: alpine/socat
+        args: ["tcp-listen:2375,fork,reuseaddr", "unix-connect:/var/run/docker.sock"]
+        volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+      volumes:
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker-daemon
+  namespace: system
+spec:
+  selector:
+    app: docker-proxy
+  ports:
+  - port: 2375
+    targetPort: 2375
+---
+apiVersion: app.example.com/v1alpha1
+kind: DockerHost
+metadata:
+  name: default
+  namespace: system
+spec:
+  hostURL: tcp://docker-daemon.system.svc:2375

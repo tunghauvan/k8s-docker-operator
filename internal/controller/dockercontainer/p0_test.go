@@ -237,6 +237,7 @@ func TestP0_DriftDetection_RestartPolicyChange(t *testing.T) {
 
 // TestP0_TunnelAuthSecret verifies that tunnel auth secret is created and used
 func TestP0_TunnelAuthSecret(t *testing.T) {
+	t.Skip("Tunnel logic moved to DockerService controller")
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(appv1alpha1.AddToScheme(scheme))

@@ -1,0 +1,8 @@
+apiVersion: app.example.com/v1alpha1
+kind: DockerContainer
+metadata:
+  name: test-nginx
+  namespace: system
+spec:
+  image: nginx:latest
+  containerName: test-nginx-operator-test

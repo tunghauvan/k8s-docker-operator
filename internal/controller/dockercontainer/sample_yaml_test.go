@@ -24,7 +24,7 @@ import (
 
 // Helper to load CR from YAML
 func loadSampleCR(t *testing.T) *appv1alpha1.DockerContainer {
-	yamlPath := filepath.Join("..", "..", "..", "config", "samples", "app_v1alpha1_dockercontainer.yaml")
+	yamlPath := filepath.Join("..", "..", "..", "examples", "dockercontainer-basic.yaml")
 	yamlContent, err := os.ReadFile(yamlPath)
 	require.NoError(t, err, "Failed to read sample YAML")
 

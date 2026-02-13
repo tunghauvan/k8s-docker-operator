@@ -586,17 +586,14 @@ func (r *DockerContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // getDockerClient resolves the Docker Client to use, with caching for remote hosts.
 func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *appv1alpha1.DockerContainer) (dockerclient.APIClient, error) {
-	// Case 1: Local (Default)
-	if cr.Spec.DockerHostRef == "" {
-		if r.DockerClient != nil {
-			return r.DockerClient, nil
-		}
-		// Fallback to Env/Socket if nil
-		return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	// Resolve DockerHost name
+	hostName := cr.Spec.DockerHostRef
+	if hostName == "" {
+		hostName = "default" // Default to "default" DockerHost CR
 	}
 
-	// Case 2: Remote DockerHost — check cache first
-	cacheKey := cr.Namespace + "/" + cr.Spec.DockerHostRef
+	// Check cache
+	cacheKey := cr.Namespace + "/" + hostName
 	if cached, ok := r.dockerClients.Load(cacheKey); ok {
 		cc := cached.(*cachedClient)
 		if time.Since(cc.createdAt) < 5*time.Minute {
@@ -610,11 +607,30 @@ func (r *DockerContainerReconciler) getDockerClient(ctx context.Context, cr *app
 	host := &appv1alpha1.DockerHost{}
 	hostKey := k8sclient.ObjectKey{
 		Namespace: cr.Namespace,
-		Name:      cr.Spec.DockerHostRef,
+		Name:      hostName,
 	}
 	if err := r.Get(ctx, hostKey, host); err != nil {
-		return nil, fmt.Errorf("failed to get DockerHost '%s': %w", cr.Spec.DockerHostRef, err)
+		if errors.IsNotFound(err) {
+			// If not found in local namespace, try "system" namespace for global default
+			if cr.Namespace != "system" {
+				systemKey := k8sclient.ObjectKey{Namespace: "system", Name: hostName}
+				if err := r.Get(ctx, systemKey, host); err == nil {
+					goto found
+				}
+			}
+
+			if hostName == "default" {
+				// Final fallback to local socket if "default" host CR not found anywhere
+				if r.DockerClient != nil {
+					return r.DockerClient, nil
+				}
+				return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+			}
+		}
+		return nil, fmt.Errorf("failed to get DockerHost '%s': %w", hostName, err)
 	}
+
+found:
 
 	opts := []dockerclient.Opt{
 		dockerclient.WithHost(host.Spec.HostURL),

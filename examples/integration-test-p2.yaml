@@ -6,8 +6,6 @@ metadata:
 spec:
   containerName: p2-app-container
   image: nginx:latest
-  ports: 
-    - "8080:80"
 ---
 apiVersion: app.example.com/v1alpha1
 kind: DockerService

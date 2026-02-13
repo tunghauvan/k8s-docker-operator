@@ -412,27 +412,45 @@ func (r *DockerServiceReconciler) deleteExternalResources(ctx context.Context, c
 
 // getDockerClient - duplicated/adapted from DockerContainerReconciler
 func (r *DockerServiceReconciler) getDockerClient(ctx context.Context, cr *appv1alpha1.DockerContainer) (dockerclient.APIClient, error) {
-	if cr.Spec.DockerHostRef == "" {
-		if r.DockerClient != nil {
-			return r.DockerClient, nil
-		}
-		return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	// Resolve DockerHost name
+	hostName := cr.Spec.DockerHostRef
+	if hostName == "" {
+		hostName = "default"
 	}
 
-	if val, ok := r.dockerClients.Load(cr.Namespace + "/" + cr.Spec.DockerHostRef); ok {
+	if val, ok := r.dockerClients.Load(cr.Namespace + "/" + hostName); ok {
 		cached := val.(*cachedClient)
 		if time.Since(cached.createdAt) < 5*time.Minute {
 			return cached.client, nil
 		}
 		// Expired
 		cached.client.Close()
-		r.dockerClients.Delete(cr.Namespace + "/" + cr.Spec.DockerHostRef)
+		r.dockerClients.Delete(cr.Namespace + "/" + hostName)
 	}
 
 	host := &appv1alpha1.DockerHost{}
-	if err := r.Get(ctx, k8sclient.ObjectKey{Namespace: cr.Namespace, Name: cr.Spec.DockerHostRef}, host); err != nil {
+	if err := r.Get(ctx, k8sclient.ObjectKey{Namespace: cr.Namespace, Name: hostName}, host); err != nil {
+		if errors.IsNotFound(err) {
+			// Try "system" namespace fallback
+			if cr.Namespace != "system" {
+				systemKey := k8sclient.ObjectKey{Namespace: "system", Name: hostName}
+				if err := r.Get(ctx, systemKey, host); err == nil {
+					goto found
+				}
+			}
+
+			if hostName == "default" {
+				// Fallback to local socket if "default" host CR not found
+				if r.DockerClient != nil {
+					return r.DockerClient, nil
+				}
+				return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+			}
+		}
 		return nil, err
 	}
+
+found:
 
 	opts := []dockerclient.Opt{
 		dockerclient.WithHost(host.Spec.HostURL),

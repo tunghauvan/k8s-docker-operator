@@ -1,15 +1,18 @@
 apiVersion: app.example.com/v1alpha1
 kind: DockerContainer
 metadata:
-  name: nginx-basic
+  labels:
+    app.kubernetes.io/name: dockercontainer
+    app.kubernetes.io/instance: dockercontainer-sample
+    app.kubernetes.io/part-of: k8s-docker-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: k8s-docker-operator
+  name: dockercontainer-sample
 spec:
   image: nginx:latest
   containerName: my-nginx
   ports:
-    - "8080:80"
-  services:
-    - port: 80
-      targetPort: 80
-      name: http
+  - "8090:80"
+  env:
+  - "ENV_VAR=value"
   restartPolicy: always
-  networkMode: kind
