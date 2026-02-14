@@ -22,13 +22,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appv1alpha1 "github.com/tunghauvan/k8s-docker-operator/api/v1alpha1"
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/common"
@@ -53,6 +57,7 @@ type cachedClient struct {
 //+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers,verbs=get;list;watch
 //+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+//+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
@@ -275,7 +280,7 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 	sort.Strings(targetIPs)
 	targetsCSV := strings.Join(targetIPs, ",")
 
-	_, err = ctrl.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	opResult, err = ctrl.CreateOrUpdate(ctx, r.Client, cm, func() error {
 		cm.Data = map[string]string{
 			"targets": targetsCSV,
 		}
@@ -283,6 +288,11 @@ func (r *DockerServiceReconciler) reconcileTunnelServer(ctx context.Context, ds 
 	})
 	if err != nil {
 		return "", err
+	}
+
+	// Trigger instant reload if updated
+	if opResult == controllerutil.OperationResultUpdated {
+		r.triggerTunnelReload(ctx, namespace, name, targetsCSV)
 	}
 
 	// 4. Deployment
@@ -663,8 +673,85 @@ found:
 	return cli, nil
 }
 
+// triggerTunnelReload pushes new targets to active tunnel server pods for sub-second latency
+func (r *DockerServiceReconciler) triggerTunnelReload(ctx context.Context, namespace, appName, targetsCSV string) {
+	l := log.FromContext(ctx)
+	l.Info("Triggering tunnel reload for app", "name", appName, "targets", targetsCSV)
+
+	// Find pods for this tunnel
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.InNamespace(namespace), client.MatchingLabels{"app": appName}); err != nil {
+		l.Error(err, "Failed to list tunnel pods for reload")
+		return
+	}
+
+	if len(podList.Items) == 0 {
+		l.Info("No active tunnel pods found for reload", "appName", appName)
+		return
+	}
+
+	for _, pod := range podList.Items {
+		l.Info("Pushing reload to pod", "pod", pod.Name, "ip", pod.Status.PodIP, "phase", pod.Status.Phase)
+		if pod.Status.Phase != corev1.PodRunning || pod.Status.PodIP == "" {
+			continue
+		}
+
+		go func(ip string) {
+			urlStr := fmt.Sprintf("http://%s:8081/reload?targets=%s", ip, url.QueryEscape(targetsCSV))
+			resp, err := http.Post(urlStr, "application/json", nil)
+			if err != nil {
+				l.Error(err, "Failed to trigger reload for pod", "ip", ip)
+				return
+			}
+			resp.Body.Close()
+			l.Info("Triggered tunnel reload", "ip", ip)
+		}(pod.Status.PodIP)
+	}
+}
+
+func (r *DockerServiceReconciler) findDockerServicesForContainer(ctx context.Context, obj client.Object) []reconcile.Request {
+	container, ok := obj.(*appv1alpha1.DockerContainer)
+	if !ok {
+		return nil
+	}
+
+	l := log.FromContext(ctx)
+	l.Info("Mapping container to services", "container", container.Name, "labels", container.Labels)
+
+	// Find all DockerServices that might select this container
+	dsList := &appv1alpha1.DockerServiceList{}
+	if err := r.List(ctx, dsList, client.InNamespace(container.Namespace)); err != nil {
+		l.Error(err, "Failed to list DockerServices for mapping")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ds := range dsList.Items {
+		if ds.Spec.Selector == nil {
+			continue
+		}
+		selector, err := metav1.LabelSelectorAsSelector(ds.Spec.Selector)
+		if err != nil {
+			continue
+		}
+		if selector.Matches(labels.Set(container.Labels)) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      ds.Name,
+					Namespace: ds.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
 func (r *DockerServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appv1alpha1.DockerService{}).
+		Watches(
+			&appv1alpha1.DockerContainer{},
+			handler.EnqueueRequestsFromMapFunc(r.findDockerServicesForContainer),
+		).
 		Complete(r)
 }

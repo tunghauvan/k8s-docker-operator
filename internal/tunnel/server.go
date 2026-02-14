@@ -16,14 +16,16 @@ import (
 
 // Server is the tunnel server running in K8s
 type Server struct {
-	listenAddr  string // TCP Address for K8s Service (e.g. :8080)
-	wsAddr      string // WebSocket Address for Client (e.g. :8081)
-	authToken   string // Shared secret for authenticating tunnel clients
-	sessions    []*yamux.Session
-	targets     []string
-	targetsFile string
-	rrIndex     uint64
-	mu          sync.Mutex
+	listenAddr   string // TCP Address for K8s Service (e.g. :8080)
+	wsAddr       string // WebSocket Address for Client (e.g. :8081)
+	authToken    string // Shared secret for authenticating tunnel clients
+	sessions     []*yamux.Session
+	targets      []string
+	pushTargets  []string
+	targetsFile  string
+	lastPushTime time.Time
+	rrIndex      uint64
+	mu           sync.Mutex
 }
 
 func NewServer(listenAddr, wsAddr, authToken string, targets []string) *Server {
@@ -58,6 +60,7 @@ func (s *Server) Start() error {
 
 	// Start WebSocket Server (Tunnel Protocol)
 	http.HandleFunc("/ws", s.handleWS)
+	http.HandleFunc("/reload", s.handleReload)
 	log.Printf("Listening for Tunnel Clients on %s", s.wsAddr)
 	if s.authToken != "" {
 		log.Printf("Tunnel authentication enabled")
@@ -239,6 +242,34 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	targets := r.URL.Query().Get("targets")
+	if targets != "" {
+		rawList := strings.Split(targets, ",")
+		var newTargets []string
+		for _, t := range rawList {
+			if tVal := strings.TrimSpace(t); tVal != "" {
+				newTargets = append(newTargets, tVal)
+			}
+		}
+		s.mu.Lock()
+		s.targets = newTargets
+		s.pushTargets = newTargets
+		s.lastPushTime = time.Now()
+		s.mu.Unlock()
+		log.Printf("Targets reloaded via Push: %v", newTargets)
+	} else {
+		log.Println("Targets reload triggered via API (Pulling from file)")
+		s.loadTargetsFromFile()
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) watchTargetsFile() {
 	log.Printf("Watching targets file: %s", s.targetsFile)
 	// Initial load
@@ -274,20 +305,32 @@ func (s *Server) loadTargetsFromFile() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Compare to avoid logging if no change
-	if len(newTargets) == len(s.targets) {
-		match := true
-		for i := range newTargets {
-			if newTargets[i] != s.targets[i] {
-				match = false
-				break
-			}
-		}
-		if match {
+	// If we had a recent push, ignore file reload if it doesn't match the pushed targets.
+	// This prevents slow Kubelet ConfigMap sync from reverting an instant push.
+	if !s.lastPushTime.IsZero() && time.Since(s.lastPushTime) < 2*time.Minute {
+		if !s.targetsEqual(newTargets, s.pushTargets) {
+			// Skip reload: file is likely still stale
 			return
 		}
 	}
 
+	// Compare to avoid logging if no change
+	if s.targetsEqual(newTargets, s.targets) {
+		return
+	}
+
 	log.Printf("Dynamic targets updated from file: %v", newTargets)
 	s.targets = newTargets
+}
+
+func (s *Server) targetsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

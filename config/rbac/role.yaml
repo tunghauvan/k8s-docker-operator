@@ -21,6 +21,7 @@ rules:
   - ""
   resources:
   - nodes
+  - pods
   verbs:
   - get
   - list
