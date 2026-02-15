@@ -26,10 +26,10 @@ type DockerDeploymentReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerdeployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerdeployments/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerdeployments/finalizers,verbs=update
-//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerdeployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerdeployments/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerdeployments/finalizers,verbs=update
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockercontainers,verbs=get;list;watch;create;update;patch;delete
 
 func (r *DockerDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)

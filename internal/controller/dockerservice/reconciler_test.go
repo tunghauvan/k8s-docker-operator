@@ -38,7 +38,7 @@ func TestDockerServiceReconciler_Reconcile(t *testing.T) {
 
 	ds := &appv1alpha1.DockerService{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "app.example.com/v1alpha1",
+			APIVersion: "kdop.io.vn/v1alpha1",
 			Kind:       "DockerService",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -55,7 +55,7 @@ func TestDockerServiceReconciler_Reconcile(t *testing.T) {
 
 	dc := &appv1alpha1.DockerContainer{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "app.example.com/v1alpha1",
+			APIVersion: "kdop.io.vn/v1alpha1",
 			Kind:       "DockerContainer",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -131,7 +131,7 @@ func TestDockerServiceReconciler_Reconcile(t *testing.T) {
 
 	// Verify Tunnel Client created in Docker
 	found := false
-	tunnelName := fmt.Sprintf("%s-tunnel-0", svcName)
+	tunnelName := fmt.Sprintf("tunnel-client-%s", svcName)
 	for _, created := range mockDocker.Created {
 		if created == tunnelName {
 			found = true

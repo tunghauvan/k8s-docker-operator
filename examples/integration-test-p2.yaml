@@ -1,4 +1,4 @@
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerContainer
 metadata:
   name: p2-app
@@ -7,7 +7,7 @@ spec:
   containerName: p2-app-container
   image: nginx:latest
 ---
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerService
 metadata:
   name: p2-app-svc

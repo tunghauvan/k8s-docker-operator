@@ -32,7 +32,7 @@ import (
 	"github.com/tunghauvan/k8s-docker-operator/internal/controller/common"
 )
 
-const finalizerName = "dockerjob.app.example.com/finalizer"
+const finalizerName = "dockerjob.kdop.io.vn/finalizer"
 
 // DockerJobReconciler reconciles a DockerJob object
 type DockerJobReconciler struct {
@@ -47,10 +47,10 @@ type cachedClient struct {
 	createdAt time.Time
 }
 
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerjobs,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerjobs/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerjobs/finalizers,verbs=update
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerjobs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerjobs/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerjobs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerhosts,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile handles the reconciliation loop for DockerJob resources.

@@ -21,9 +21,9 @@ import (
 // ClientBuilderFunc defines a function to create a Docker client
 type ClientBuilderFunc func(opts ...dockerclient.Opt) (dockerclient.APIClient, error)
 
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts/finalizers,verbs=update
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerhosts,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerhosts/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerhosts/finalizers,verbs=update
 
 // DockerHostReconciler reconciles a DockerHost object
 type DockerHostReconciler struct {

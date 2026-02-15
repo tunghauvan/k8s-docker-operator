@@ -159,6 +159,10 @@ func (m *MockDockerClient) Ping(ctx context.Context) (types.Ping, error) {
 	return types.Ping{APIVersion: "1.41"}, nil
 }
 
+func (m *MockDockerClient) ImageInspectWithRaw(ctx context.Context, imageID string) (types.ImageInspect, []byte, error) {
+	return types.ImageInspect{}, nil, nil
+}
+
 func (m *MockDockerClient) Close() error {
 	return nil
 }

@@ -4,20 +4,32 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: dockercontainers.app.example.com
+  name: dockerjobs.kdop.io.vn
 spec:
-  group: app.example.com
+  group: kdop.io.vn
   names:
-    kind: DockerContainer
-    listKind: DockerContainerList
-    plural: dockercontainers
-    singular: dockercontainer
+    kind: DockerJob
+    listKind: DockerJobList
+    plural: dockerjobs
+    singular: dockerjob
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.exitCode
+      name: Exit Code
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: DockerContainer is the Schema for the dockercontainers API
+        description: |-
+          DockerJob is the Schema for the dockerjobs API.
+          It runs a one-off container on a Docker host and tracks its completion.
         properties:
           apiVersion:
             description: |-
@@ -37,16 +49,34 @@ spec:
           metadata:
             type: object
           spec:
-            description: DockerContainerSpec defines the desired state of DockerContainer
+            description: DockerJobSpec defines the desired state of DockerJob
             properties:
+              activeDeadlineSeconds:
+                description: |-
+                  ActiveDeadlineSeconds specifies a timeout in seconds. If the job does not
+                  complete within this duration, it is terminated and marked as Failed.
+                format: int64
+                type: integer
+              args:
+                description: Args are arguments to the command (Docker CMD)
+                items:
+                  type: string
+                type: array
+              backoffLimit:
+                description: |-
+                  BackoffLimit specifies the number of retries before marking this job as failed.
+                  Default: 0 (no retries)
+                format: int32
+                type: integer
               command:
-                description: Command to run in the container
+                description: Command to run in the container (Docker ENTRYPOINT)
                 items:
                   type: string
                 type: array
               containerName:
-                description: ContainerName is the name of the container on the docker
-                  host
+                description: |-
+                  ContainerName is the name of the container on the docker host.
+                  Defaults to "job-<metadata.name>" if empty.
                 type: string
               dockerHostRef:
                 description: |-
@@ -60,7 +90,7 @@ spec:
                 type: array
               envVars:
                 description: EnvVars list of environment variables with support for
-                  ValueFrom
+                  ValueFrom (K8s Secrets)
                 items:
                   description: EnvVar defines an environment variable
                   properties:
@@ -94,27 +124,6 @@ spec:
                   - name
                   type: object
                 type: array
-              healthCheck:
-                description: HealthCheck defines a Docker health check for the container
-                properties:
-                  interval:
-                    description: Interval between checks (e.g. "30s")
-                    type: string
-                  retries:
-                    description: Retries before reporting unhealthy
-                    type: integer
-                  test:
-                    description: Test is the command to run (e.g. ["CMD", "curl",
-                      "-f", "http://localhost/"])
-                    items:
-                      type: string
-                    type: array
-                  timeout:
-                    description: Timeout for a single check (e.g. "5s")
-                    type: string
-                required:
-                - test
-                type: object
               image:
                 description: Image is the Docker image to run
                 type: string
@@ -122,15 +131,6 @@ spec:
                 description: ImagePullSecret is the name of the Secret containing
                   Docker registry credentials
                 type: string
-              networkMode:
-                description: NetworkMode for the container (e.g. "host", "bridge",
-                  "kind")
-                type: string
-              ports:
-                description: Ports list of port mappings (e.g. "8080:80")
-                items:
-                  type: string
-                type: array
               resources:
                 description: Resources defines CPU and Memory limits for the container
                 properties:
@@ -144,8 +144,9 @@ spec:
                     type: string
                 type: object
               restartPolicy:
-                description: RestartPolicy for the container (no, on-failure, always,
-                  unless-stopped)
+                description: |-
+                  RestartPolicy for the job container. Only "Never" or "OnFailure" are valid.
+                  Default: "Never"
                 type: string
               secretVolumes:
                 description: SecretVolumes list of Kubernetes Secrets to mount as
@@ -166,30 +167,13 @@ spec:
                   - secretName
                   type: object
                 type: array
-              services:
+              ttlSecondsAfterFinished:
                 description: |-
-                  Services defines the ports to expose via Kubernetes Service
-                  Deprecated: Use DockerService CRD for network exposure instead.
-                items:
-                  properties:
-                    name:
-                      description: Name is the name of the port
-                      type: string
-                    port:
-                      description: Port is the port number to expose on the Kubernetes
-                        Service
-                      format: int32
-                      type: integer
-                    targetPort:
-                      description: TargetPort is the port number on the container
-                        to forward to
-                      format: int32
-                      type: integer
-                  required:
-                  - port
-                  - targetPort
-                  type: object
-                type: array
+                  TTLSecondsAfterFinished specifies the number of seconds after job completion
+                  (Succeeded or Failed) before the Docker container is cleaned up.
+                  If unset, the container is not automatically removed.
+                format: int32
+                type: integer
               volumeMounts:
                 description: VolumeMounts list of volumes to mount into the container
                 items:
@@ -209,22 +193,39 @@ spec:
                   - hostPath
                   type: object
                 type: array
+            required:
+            - image
             type: object
           status:
-            description: DockerContainerStatus defines the observed state of DockerContainer
+            description: DockerJobStatus defines the observed state of DockerJob
             properties:
-              health:
-                description: Health is the Docker health status (healthy, unhealthy,
-                  starting, none)
+              attempts:
+                description: Attempts is the number of times the container has been
+                  run
+                format: int32
+                type: integer
+              completionTime:
+                description: CompletionTime is the time the job container finished
+                format: date-time
                 type: string
-              id:
-                description: ID of the container
+              containerID:
+                description: ContainerID is the Docker container ID
                 type: string
-              ipv4:
-                description: IPv4 address of the container
+              exitCode:
+                description: ExitCode is the exit code of the container process
+                format: int32
+                type: integer
+              message:
+                description: Message is a human-readable message indicating details
+                  about the job status
                 type: string
-              state:
-                description: State request state of the container
+              phase:
+                description: Phase is the current phase of the job (Pending, Running,
+                  Succeeded, Failed)
+                type: string
+              startTime:
+                description: StartTime is the time the job container was started
+                format: date-time
                 type: string
             type: object
         type: object

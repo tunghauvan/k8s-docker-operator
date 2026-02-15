@@ -57,7 +57,7 @@ You can find a variety of example configurations in the [examples/](examples/) d
 If you want to use a remote Docker daemon, create a `DockerHost` resource:
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerHost
 metadata:
   name: remote-host
@@ -71,7 +71,7 @@ spec:
 Deploy an Nginx container on a specific host and expose it to the Kubernetes cluster:
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerContainer
 metadata:
   name: nginx-basic
@@ -95,7 +95,7 @@ Once applied, the operator will:
 ### 3. Volume Mounting
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerContainer
 metadata:
   name: nginx-volume
@@ -112,7 +112,7 @@ spec:
 Inject sensitive data as environment variables or files:
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerContainer
 metadata:
   name: nginx-secret
@@ -137,7 +137,7 @@ spec:
 Run a one-off task (like a database migration or batch script) that tracks completion:
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerJob
 metadata:
   name: db-migrate

@@ -17,7 +17,7 @@ Key features:
 ### Basic Example
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerJob
 metadata:
   name: batch-process-1
@@ -30,7 +30,7 @@ spec:
 ### Full Specification
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerJob
 metadata:
   name: database-backup

@@ -57,17 +57,17 @@ type cachedClient struct {
 	createdAt time.Time
 }
 
-//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers/finalizers,verbs=update
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockercontainers,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockercontainers/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockercontainers/finalizers,verbs=update
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerhosts,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 
-const finalizerName = "dockercontainer.app.example.com/finalizer"
+const finalizerName = "dockercontainer.kdop.io.vn/finalizer"
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

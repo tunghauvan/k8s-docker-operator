@@ -126,7 +126,7 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "94c73569.example.com",
+		LeaderElectionID:       "94c73569.kdop.io.vn",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

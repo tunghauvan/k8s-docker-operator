@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: dockerdeployments.app.example.com
+  name: dockerdeployments.kdop.io.vn
 spec:
-  group: app.example.com
+  group: kdop.io.vn
   names:
     kind: DockerDeployment
     listKind: DockerDeploymentList
@@ -366,7 +366,7 @@ spec:
                       - Unknown
                       type: string
                     type:
-                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      description: type of condition in CamelCase or in foo.kdop.io.vn/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string

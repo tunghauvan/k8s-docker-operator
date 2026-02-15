@@ -39,7 +39,7 @@ spec:
   - port: 2375
     targetPort: 2375
 ---
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerHost
 metadata:
   name: default

@@ -51,11 +51,11 @@ type cachedClient struct {
 	createdAt time.Time
 }
 
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerservices,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerservices/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerservices/finalizers,verbs=update
-//+kubebuilder:rbac:groups=app.example.com,resources=dockercontainers,verbs=get;list;watch
-//+kubebuilder:rbac:groups=app.example.com,resources=dockerhosts,verbs=get;list;watch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerservices,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerservices/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerservices/finalizers,verbs=update
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockercontainers,verbs=get;list;watch
+//+kubebuilder:rbac:groups=kdop.io.vn,resources=dockerhosts,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -63,7 +63,7 @@ type cachedClient struct {
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
-const finalizerName = "dockerservice.app.example.com/finalizer"
+const finalizerName = "dockerservice.kdop.io.vn/finalizer"
 
 func (r *DockerServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)

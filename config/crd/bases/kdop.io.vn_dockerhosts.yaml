@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: dockerhosts.app.example.com
+  name: dockerhosts.kdop.io.vn
 spec:
-  group: app.example.com
+  group: kdop.io.vn
   names:
     kind: DockerHost
     listKind: DockerHostList

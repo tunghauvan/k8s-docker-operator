@@ -38,44 +38,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - app.example.com
-  resources:
-  - dockercontainers
-  - dockerdeployments
-  - dockerhosts
-  - dockerjobs
-  - dockerservices
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - app.example.com
-  resources:
-  - dockercontainers/finalizers
-  - dockerdeployments/finalizers
-  - dockerhosts/finalizers
-  - dockerjobs/finalizers
-  - dockerservices/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - app.example.com
-  resources:
-  - dockercontainers/status
-  - dockerdeployments/status
-  - dockerhosts/status
-  - dockerjobs/status
-  - dockerservices/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
   - apps
   resources:
   - deployments
@@ -99,3 +61,41 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - kdop.io.vn
+  resources:
+  - dockercontainers
+  - dockerdeployments
+  - dockerhosts
+  - dockerjobs
+  - dockerservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kdop.io.vn
+  resources:
+  - dockercontainers/finalizers
+  - dockerdeployments/finalizers
+  - dockerhosts/finalizers
+  - dockerjobs/finalizers
+  - dockerservices/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kdop.io.vn
+  resources:
+  - dockercontainers/status
+  - dockerdeployments/status
+  - dockerhosts/status
+  - dockerjobs/status
+  - dockerservices/status
+  verbs:
+  - get
+  - patch
+  - update

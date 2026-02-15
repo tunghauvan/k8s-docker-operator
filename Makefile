@@ -34,11 +34,11 @@ run: install
 
 # Install CRDs into a cluster
 install:
-	kubectl apply -f config/crd/bases/app.example.com_composeapps.yaml
+	kubectl apply -f config/crd/bases/
 
 # Uninstall CRDs from a cluster
 uninstall:
-	kubectl delete -f config/crd/bases/app.example.com_composeapps.yaml
+	kubectl delete -f config/crd/bases/
 
 # Build the docker image
 docker-build:
@@ -91,6 +91,7 @@ generate: controller-gen
 # Generate manifests e.g. CRD, RBAC etc.
 manifests: controller-gen
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=config/crd/bases
+	find config/crd/bases -name "*.yaml" -exec sed -i '' 's/foo.example.com/foo.kdop.io.vn/g' {} +
 
 # Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin

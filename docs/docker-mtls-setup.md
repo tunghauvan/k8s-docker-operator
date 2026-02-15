@@ -80,7 +80,7 @@ kubectl create secret generic docker-remote-tls \
 Now you can create a `DockerHost` resource pointing to your remote daemon:
 
 ```yaml
-apiVersion: app.example.com/v1alpha1
+apiVersion: kdop.io.vn/v1alpha1
 kind: DockerHost
 metadata:
   name: remote-host
