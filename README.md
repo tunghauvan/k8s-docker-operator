@@ -28,8 +28,8 @@ Turn any machine with Docker installed into a managed compute node.
 
 ### 2. The "Remote Docker" Pattern
 Instead of joining nodes to the cluster (heavy, secure VPNs needed), we use a **reverse tunnel**.
-*   **Firewall Friendly**: Works behind NAT, corporate firewalls, and 4G networks.
-*   **Zero-Trust**: The agent dials OUT to the cluster. No inbound ports required on the edge device.
+*   **Firewall Friendly (data plane)**: Service traffic flows over a tunnel that the Docker host dials OUT to the cluster.
+*   **Current limitation**: The operator still calls each Docker daemon's API directly, so the control plane needs inbound access to the host (TCP 2376), and the tunnel is not yet encrypted. Hosts behind NAT, and fully outbound-only setups, are the goal of the [agent-hub design](docs/design/agent-hub.md). See [Known gaps](docs/architecture.md#known-gaps).
 
 ### 3. Cost-Efficiency at Scale
 *   **100% Resource Utilization**: Run microservices on $3/mo instances without losing 50% RAM to system overhead.
@@ -75,22 +75,34 @@ apiVersion: kdop.io.vn/v1alpha1
 kind: DockerContainer
 metadata:
   name: nginx-basic
+  labels:
+    app: nginx-basic
 spec:
   image: "nginx:latest"
   containerName: "my-nginx"
   dockerHostRef: "remote-host" # Omit for local Docker socket
-  services:
+---
+apiVersion: kdop.io.vn/v1alpha1
+kind: DockerService
+metadata:
+  name: nginx-basic
+spec:
+  selector:
+    matchLabels:
+      app: nginx-basic
+  ports:
     - name: http
       port: 80
       targetPort: 80
 ```
 
 Once applied, the operator will:
-1.  Pull the image on the target Docker host.
-2.  Start the container.
-3.  Deploy a **Tunnel Server** pod in Kubernetes.
-4.  Start a **Tunnel Client** alongside your container on the Docker host.
-5.  Create a **Kubernetes Service** named `tunnel-nginx-basic` pointing to the container.
+1.  Pull the image on the target Docker host and start the container.
+2.  Deploy a **Tunnel Server** pod in Kubernetes.
+3.  Start a **Tunnel Client** container on the Docker host.
+4.  Create a **Kubernetes Service** named `tunnel-nginx-basic` that forwards to the container.
+
+> The `services` field on `DockerContainer` is no longer acted on; use a `DockerService`. Today a `DockerService` supports one port and containers on a single Docker host; see [Known gaps](docs/architecture.md#known-gaps).
 
 ### 3. Volume Mounting
 
@@ -164,13 +176,19 @@ The operator will:
 4.  Retry up to `backoffLimit` times on failure.
 5.  Clean up the container after `ttlSecondsAfterFinished`.
 
-## 🏗 Architecture (Tunnel Gateway)
+## 🏗 Architecture
 
-The operator uses a centralized **Tunnel Gateway** architecture to minimize external port exposure:
+-   **Controller manager**: Runs the `DockerHost`, `DockerContainer`, `DockerService`, `DockerJob` and `DockerDeployment` reconcilers and calls each Docker daemon's API directly.
+-   **Tunnel Gateway**: Listens on a fixed NodePort (`30000`) and forwards tunnel clients to their tunnel server.
+-   **Tunnel Server**: One per `DockerService`, running in Kubernetes behind a `ClusterIP` service.
+-   **Tunnel Client**: One per `DockerService`, running on the Docker host and dialing the gateway to open a reverse tunnel.
 
--   **Tunnel Gateway**: Listens on a fixed NodePort (`30000`). This is the only port exposed externally for tunneling.
--   **Tunnel Server**: Runs inside Kubernetes as a `ClusterIP` service. It remains private and secure.
--   **Tunnel Client**: Runs on the Docker host, connecting to the Gateway to establish a reverse tunnel back to Kubernetes.
+Known limitations today: one working port per `DockerService`, a `DockerService` cannot span several Docker hosts, and the gateway and tunnel have no authorization or encryption hardening yet.
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Current architecture, exposed endpoints, known gaps, worst-case scenarios |
+| [docs/design/agent-hub.md](docs/design/agent-hub.md) | Proposed agent-per-host design: multi-port and multi-host services, NAT support, rollout plan |
 
 ## 📜 License
 
